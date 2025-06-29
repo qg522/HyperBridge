@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.modules.image_encoder import CNNImageEncoder
-from models.modules.text_encoder import BiLSTMTextEncoder
-from models.modules.hyper_generator import HybridHyperedgeGenerator
-from models.modules.wavelet_cheb_conv import WaveletChebConv
-from models.modules.pruning_regularizer import SpectralCutRegularizer
+from .modules.image_encoder import CNNImageEncoder
+from .modules.text_encoder import BiLSTMTextEncoder
+from .modules.hyper_generator import HybridHyperedgeGenerator
+from .modules.wavelet_cheb_conv import WaveletChebConv
+from .modules.pruning_regularizer import SpectralCutRegularizer
 
 class HyperBridge(nn.Module):
     def __init__(self, config):

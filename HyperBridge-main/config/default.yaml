@@ -1,0 +1,51 @@
+# 数据设置
+dataset:
+  name: medmnist
+  subsets: ['pathmnist', 'bloodmnist', 'organmnist']
+  batch_size: 64
+  num_workers: 4
+
+# 模态输入维度
+input_dims:
+  image: 64
+  text: 64
+  signal: 64
+
+# 模型结构参数
+model:
+  hidden: 64
+  top_k: 10
+  thresh: 0.5
+  K: 5           # Chebyshev 阶数
+  tau: 0.5       # 小波核平滑系数
+  n_class: 3     # 类别数，可根据数据集实际改
+
+# Text 模态参数
+text:
+  vocab_size: 5000
+  embed_dim: 128
+  text_hidden: 64
+
+# Signal 模态参数
+signal:
+  sig_in: 32
+
+# 优化器设置
+optimizer:
+  type: adam
+  lr: 0.001
+  weight_decay: 1e-4
+
+# 训练参数
+train:
+  epochs: 100
+  seed: 42
+  log_interval: 10
+  save_path: checkpoints/
+
+# 正则项系数
+regularization:
+  lambda: 0.1
+
+# 是否使用 GPU
+device: cuda
