@@ -33,10 +33,11 @@ class WaveletChebConv(nn.Module):
         # 切比雪夫-高斯积分法
         coeffs = []
         for k in range(self.K):
-            x_k = torch.cos(torch.pi * (k + 0.5) / self.K)
+            # 修复：确保输入是张量
+            x_k = torch.cos(torch.tensor(torch.pi * (k + 0.5) / self.K))
             c_k = (2 / self.K) * wavelet_kernel(x_k)
             coeffs.append(c_k)
-        return torch.tensor(coeffs).float().view(-1, 1, 1)  # (K, 1, 1)
+        return torch.stack(coeffs).float().view(-1, 1, 1)  # (K, 1, 1)
 
     def forward(self, x, laplacian):
         """

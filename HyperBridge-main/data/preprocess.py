@@ -469,6 +469,164 @@ def load_pathmnist_dataset(batch_size=128, num_samples=512):
     return images, labels
 
 
+def load_medmnist_dataset(dataset_name='pathmnist', batch_size=128, num_samples=512):
+    """
+    加载MedMNIST数据集的通用函数
+    Args:
+        dataset_name: 数据集名称 ('pathmnist', 'bloodmnist', 'organsmnist', etc.)
+        batch_size: 批处理大小
+        num_samples: 用于构建超图的样本数量
+    Returns:
+        图像和标签张量
+    """
+    data_flag = dataset_name
+    info = INFO[data_flag]
+    DataClass = getattr(medmnist, info['python_class'])
+
+    # 定义转换：将PIL图像转换为张量
+    transform = transforms.Compose([
+        transforms.ToTensor()
+    ])
+
+    # 加载数据集并应用转换
+    train_dataset = DataClass(split='train', download=True, transform=transform)
+
+    # 创建数据加载器
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True
+    )
+
+    # 获取足够的样本
+    images_list, labels_list = [], []
+    total_samples = 0
+    data_iter = iter(train_loader)
+
+    while total_samples < num_samples:
+        try:
+            # 确保数据是张量
+            data, target = next(data_iter)
+
+            # 检查数据类型并转换为张量
+            if isinstance(data, list):
+                data = torch.stack(data)
+            if isinstance(target, list):
+                target = torch.stack(target)
+
+            images_list.append(data)
+            labels_list.append(target)
+            total_samples += data.shape[0]
+        except StopIteration:
+            # 如果数据用完了，重新开始迭代
+            data_iter = iter(train_loader)
+
+    images = torch.cat(images_list)[:num_samples]
+    labels = torch.cat(labels_list)[:num_samples].squeeze()
+
+    print(f"Loaded {dataset_name.upper()} dataset with {images.shape[0]} samples")
+    print(f"Image shape: {images.shape[1:]}")
+    print(f"Number of classes: {len(torch.unique(labels))}")
+
+    return images, labels
+
+
+def process_multimodal_datasets(data_loaders, num_samples=256):
+    """
+    处理多个数据集并转换为超图结构
+    Args:
+        data_loaders: 从load_medmnist()返回的数据加载器字典
+        num_samples: 每个数据集使用的样本数量
+    Returns:
+        超图结果字典
+    """
+    print(f"\n{'='*80}")
+    print(f"🔄 PROCESSING MULTIMODAL DATASETS TO HYPERGRAPHS")
+    print(f"{'='*80}")
+    
+    # 设置保存目录
+    save_dir = "hypergraph_results"
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 初始化转换器
+    converter = HypergraphConverter(similarity_threshold=0.7, max_hyperedge_size=12, feature_dim=64)
+    
+    hypergraph_datasets = {}
+    
+    for dataset_name, loaders in data_loaders.items():
+        try:
+            print(f"\n📊 Processing {dataset_name.upper()}...")
+            
+            # 从训练数据加载器中提取数据
+            train_loader = loaders['train']
+            images_list = []
+            labels_list = []
+            collected = 0
+            
+            for batch_images, batch_labels in train_loader:
+                images_list.append(batch_images)
+                labels_list.append(batch_labels.squeeze())
+                collected += batch_images.shape[0]
+                
+                if collected >= num_samples:
+                    break
+            
+            # 合并数据
+            images = torch.cat(images_list)[:num_samples]
+            labels = torch.cat(labels_list)[:num_samples]
+            
+            # 确保图像格式正确
+            if images.dtype != torch.float32:
+                images = images.float()
+            
+            print(f"  数据形状: {images.shape}, 标签: {labels.shape}")
+            print(f"  类别数: {len(torch.unique(labels))}")
+            
+            # 转换为超图
+            hypergraph_data = converter.convert_to_hypergraph(images, labels)
+            hypergraph_datasets[dataset_name.upper()] = hypergraph_data
+            
+            # 保存单个数据集结果
+            save_file = f"{save_dir}/{dataset_name}_hypergraph.pkl"
+            with open(save_file, 'wb') as f:
+                save_data = hypergraph_data.copy()
+                save_data['hypergraph_edges'] = hypergraph_data['hyperedges_dict']
+                # 临时移除HyperNetX对象以便序列化
+                if 'hypergraph' in save_data:
+                    del save_data['hypergraph']
+                pickle.dump(save_data, f)
+            
+            print(f"✅ {dataset_name.upper()}: {hypergraph_data['n_nodes']} nodes, {hypergraph_data['n_hyperedges']} hyperedges")
+            
+        except Exception as e:
+            print(f"❌ Error processing {dataset_name}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    # 打印总结统计
+    if hypergraph_datasets:
+        print(f"\n📈 SUMMARY STATISTICS:")
+        print(f"{'Dataset':<15} {'Nodes':<8} {'Hyperedges':<12} {'Avg Edge Size':<15}")
+        print(f"{'-'*50}")
+        
+        for dataset_name, data in hypergraph_datasets.items():
+            hypergraph = data['hypergraph']
+            avg_edge_size = 0
+            if data['n_hyperedges'] > 0:
+                edge_sizes = [len(hypergraph.edges[edge]) for edge in hypergraph.edges]
+                avg_edge_size = np.mean(edge_sizes)
+            
+            print(f"{dataset_name:<15} {data['n_nodes']:<8} {data['n_hyperedges']:<12} {avg_edge_size:<15.2f}")
+    
+    print(f"\n{'='*80}")
+    print("🎉 MULTIMODAL DATASET PROCESSING COMPLETED!")
+    print(f"📁 Results saved in '{save_dir}' directory")
+    print(f"{'='*80}")
+    
+    return hypergraph_datasets
+
+
 def visualize_hypergraph_for_pathmnist():
     """
     为PathMNIST数据集创建超图并可视化
