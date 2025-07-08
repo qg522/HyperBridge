@@ -447,7 +447,7 @@ class HyperBridgeTrainer:
         
         return best_val_accuracy
     
-    def evaluate_and_visualize(self, save_dir='training_results'):
+    def evaluate_and_visualize(self, save_dir='training_results', dataset_name='dataset'):
         """Comprehensive evaluation and visualization"""
         print("\n📊 Creating comprehensive evaluation and visualizations...")
         
@@ -554,9 +554,9 @@ class HyperBridgeTrainer:
         plt.subplot(2, 3, 4)
         if embeddings.shape[1] > 2:
             tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(embeddings)//4))
-            embeddings_2d = tsne.fit_transform(embeddings.numpy())
+            embeddings_2d = tsne.fit_transform(embeddings.cpu().numpy())
         else:
-            embeddings_2d = embeddings.numpy()
+            embeddings_2d = embeddings.cpu().numpy()
         
         unique_labels = np.unique(labels)
         colors = plt.cm.tab10(np.arange(len(unique_labels)))
@@ -586,7 +586,7 @@ class HyperBridgeTrainer:
         plt.subplot(2, 3, 6)
         all_edge_weights = []
         for info in hypergraph_info:
-            all_edge_weights.extend(info['edge_weights'].numpy())
+            all_edge_weights.extend(info['edge_weights'].cpu().numpy())
         
         if all_edge_weights:
             plt.hist(all_edge_weights, bins=30, alpha=0.7, color='green', edgecolor='black')

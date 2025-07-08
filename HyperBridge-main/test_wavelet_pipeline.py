@@ -254,18 +254,18 @@ class WaveletPipelineTester:
             
             return {
                 'dataset_name': dataset_name,
-                'node_features': node_features.detach().numpy(),
-                'hypergraph_H': H.detach().numpy(),
-                'edge_weights': edge_weights.detach().numpy(),
-                'laplacian': L.detach().numpy(),
-                'conv1_output': x1.detach().numpy(),
-                'conv2_output': x2.detach().numpy(),
-                'logits': logits.detach().numpy(),
-                'predictions': predictions.detach().numpy(),
-                'predicted_classes': predicted_classes.detach().numpy(),
-                'labels': all_labels.numpy(),
+                'node_features': node_features.detach().cpu().numpy(),
+                'hypergraph_H': H.detach().cpu().numpy(),
+                'edge_weights': edge_weights.detach().cpu().numpy(),
+                'laplacian': L.detach().cpu().numpy(),
+                'conv1_output': x1.detach().cpu().numpy(),
+                'conv2_output': x2.detach().cpu().numpy(),
+                'logits': logits.detach().cpu().numpy(),
+                'predictions': predictions.detach().cpu().numpy(),
+                'predicted_classes': predicted_classes.detach().cpu().numpy(),
+                'labels': all_labels.cpu().numpy(),
                 'accuracy': accuracy.item(),
-                'images': all_images.numpy()
+                'images': all_images.cpu().numpy()
             }
             
         except Exception as e:

@@ -22,10 +22,15 @@ class SpectralCutRegularizer(nn.Module):
         """
         device = F.device
 
+        # 确保所有张量在同一设备上
+        H = H.to(device)
+        Dv = Dv.to(device)
+        De = De.to(device)
+
         # Dv^{-1/2}
-        Dv_inv_sqrt = torch.diag(torch.pow(torch.diag(Dv), -0.5)).to(device)
+        Dv_inv_sqrt = torch.diag(torch.pow(torch.diag(Dv) + 1e-8, -0.5)).to(device)
         # De^{-1}
-        De_inv = torch.diag(1.0 / torch.diag(De)).to(device)
+        De_inv = torch.diag(1.0 / (torch.diag(De) + 1e-8)).to(device)
 
         # 构造超图拉普拉斯算子
         L = torch.eye(Dv.shape[0]).to(device) - Dv_inv_sqrt @ H @ De_inv @ H.t() @ Dv_inv_sqrt

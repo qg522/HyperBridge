@@ -49,7 +49,7 @@ class HypergraphConverter:
         batch_size = images.shape[0]
 
         # 展平图像
-        features = images.view(batch_size, -1).numpy()
+        features = images.view(batch_size, -1).cpu().numpy()
 
         # 使用PCA降维
         n_components = min(self.feature_dim, features.shape[1], features.shape[0])
@@ -157,7 +157,7 @@ class HypergraphConverter:
         similarity_matrix = self.compute_similarity_matrix(features)
 
         # 生成超边
-        labels_np = labels.numpy().flatten() if labels is not None else None
+        labels_np = labels.cpu().numpy().flatten() if labels is not None else None
         hyperedges_dict = self.generate_hyperedges_dict(similarity_matrix, labels_np)
 
         # 创建HyperNetX超图

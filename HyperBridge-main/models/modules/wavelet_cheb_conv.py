@@ -44,6 +44,9 @@ class WaveletChebConv(nn.Module):
         x: 节点特征, shape = (N, in_dim)
         laplacian: 拉普拉斯矩阵 (稀疏 or dense), shape = (N, N)
         """
+        # 确保切比雪夫系数在正确设备上
+        cheb_coeff = self.cheb_coeff.to(x.device)
+        
         Tx_0 = x  # T_0(x)
         Tx_1 = torch.matmul(laplacian, x)  # T_1(x)
         Tx_list = [Tx_0, Tx_1]
@@ -55,5 +58,5 @@ class WaveletChebConv(nn.Module):
         Tx_stack = torch.stack(Tx_list, dim=0)  # (K, N, in_dim)
 
         # 融合小波核系数
-        output = torch.einsum("kni,kio,k->no", Tx_stack, self.theta, self.cheb_coeff.squeeze())
+        output = torch.einsum("kni,kio,k->no", Tx_stack, self.theta, cheb_coeff.squeeze())
         return output

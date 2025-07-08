@@ -52,8 +52,26 @@ class HybridHyperedgeGenerator(nn.Module):
             edge = [i] + neighbors.tolist()
             edge_list.append(edge)
 
-            edge_feat = fused_features[edge]  # [K+1, H]
-            weight = torch.sigmoid(edge_feat.mean())
+            # 改进的超边打分机制 - 更贴近公式 w_e = σ(∑_m α_m · MLP_m(·))
+            edge_feat_per_modality = []
+            for m in range(self.num_modalities):
+                # 对每个模态，取超边上节点的特征并通过对应的MLP
+                edge_nodes_feat = x_list[m][edge]  # [K+1, D_m]
+                edge_modal_feat = self.modal_mlps[m](edge_nodes_feat)  # [K+1, H]
+                edge_feat_per_modality.append(edge_modal_feat)
+            
+            # 堆叠所有模态特征 [M, K+1, H]
+            stacked_edge_feats = torch.stack(edge_feat_per_modality, dim=0)
+            
+            # 应用注意力权重进行模态融合
+            attn_scores = F.softmax(self.attn_weights, dim=0).view(-1, 1, 1)  # [M, 1, 1]
+            weighted_edge_feats = torch.sum(attn_scores * stacked_edge_feats, dim=0)  # [K+1, H]
+            
+            # 聚合超边上所有节点的特征 (平均池化)
+            aggregated_edge_feat = weighted_edge_feats.mean(dim=0)  # [H]
+            
+            # 通过融合投影层和sigmoid得到最终权重
+            weight = torch.sigmoid(self.fusion_proj(aggregated_edge_feat).mean())  # 标量权重
             edge_weights.append(weight)
 
         H = torch.zeros(N, len(edge_list)).to(fused_features.device)
@@ -65,14 +83,3 @@ class HybridHyperedgeGenerator(nn.Module):
                 final_weights.append(w)
 
         return H, torch.tensor(final_weights).to(fused_features.device)
-
-
-if __name__ == '__main__':
-    # 模拟3模态输入
-    x1 = torch.rand(100, 64)  # 图像
-    x2 = torch.rand(100, 32)  # 时间序列
-    x3 = torch.rand(100, 16)  # 文本
-    model = HybridHyperedgeGenerator(num_modalities=3, input_dims=[64, 32, 16], hidden_dim=64)
-    H, edge_weights = model([x1, x2, x3])
-    print("H shape:", H.shape)
-    print("Selected edges:", edge_weights.shape)
