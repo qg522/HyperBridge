@@ -1423,16 +1423,11 @@ class AblationExperiment:
 
         return self.results
 
-    def create_visualization(self, save_dir=None):
-        """Create comprehensive visualization results with AUC and Accuracy"""
+    def create_visualization(self):
+        """Create comprehensive visualization results with AUC and Accuracy (display only)"""
         if not self.results:
             print("No available experimental results")
             return
-
-        if save_dir is None:
-            save_dir = f"ablation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        os.makedirs(save_dir, exist_ok=True)
 
         # Define a mapping for shorter, readable plot labels
         plot_label_map = {
@@ -1547,16 +1542,33 @@ class AblationExperiment:
 
         plt.tight_layout(
             rect=[0, 0.03, 1, 0.95])  # Adjust tight_layout to prevent title/label overlap with main title if needed
-        plt.savefig(os.path.join(save_dir, 'ablation_comparison.png'), dpi=300, bbox_inches='tight')
-        plt.close()
+        plt.show()  # Display the plot instead of saving
 
-        self._create_performance_table(save_dir, methods, aucs, accuracies)
-        self._generate_analysis_report(save_dir, methods, aucs, accuracies)
+        # Display performance summary in console
+        self._print_performance_summary(methods, aucs, accuracies)
 
-        print(f"Results saved to: {save_dir}")
+    def _print_performance_summary(self, methods, aucs, accuracies):
+        """Print performance summary to console"""
+        print("\n" + "="*60)
+        print("ABLATION EXPERIMENT PERFORMANCE SUMMARY")
+        print("="*60)
+        
+        # Create a list of tuples for sorting
+        results = list(zip(methods, aucs, accuracies))
+        # Sort by AUC in descending order
+        results.sort(key=lambda x: x[1], reverse=True)
+        
+        print(f"{'Method':<25} {'AUC':<8} {'Accuracy':<10}")
+        print("-" * 45)
+        
+        for method, auc, acc in results:
+            print(f"{method:<25} {auc:<8.4f} {acc:<10.4f}")
+        
+        print("="*60)
 
-    # === _create_performance_table 和 _generate_analysis_report 保持不变，它们应该在 AblationExperiment 类中与 create_visualization 同级别 ===
-    def _create_performance_table(self, save_dir, methods, aucs, accuracies):
+    # These functions are no longer needed since we're not saving files
+    # def _create_performance_table(self, save_dir, methods, aucs, accuracies):
+    # def _generate_analysis_report(self, save_dir, methods, aucs, accuracies):
         """创建性能对比表格"""
         table_path = os.path.join(save_dir, 'performance_table.csv')
 
@@ -1661,16 +1673,11 @@ class AblationExperiment:
         print(f"Analysis report saved to: {report_path}")
 
     # === create_enhanced_visualization 也需要进行类似优化和位置修正 ===
-    def create_enhanced_visualization(self, save_dir=None):
-        """Create enhanced visualization results with anomaly type analysis"""
+    def create_enhanced_visualization(self):
+        """Create enhanced visualization results with anomaly type analysis (display only)"""
         if not self.results:
             print("No available experimental results")
             return
-
-        if save_dir is None:
-            save_dir = f"enhanced_ablation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        os.makedirs(save_dir, exist_ok=True)
 
         # Define a mapping for shorter, readable plot labels for enhanced viz
         plot_label_map_enhanced = {
@@ -1934,26 +1941,25 @@ class AblationExperiment:
         plt.grid(True, alpha=0.3, axis='x')
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # Adjust overall tight_layout for enhanced plots
-        plt.savefig(os.path.join(save_dir, 'enhanced_ablation_analysis.png'), dpi=300, bbox_inches='tight')
         plt.show()  # Display the enhanced plot
 
-        with open(os.path.join(save_dir, 'enhanced_results.json'), 'w', encoding='utf-8') as f:
-            serializable_results = {}
-            for exp_name in ordered_exp_names:
-                result = self.results[exp_name]
-                display_name = plot_label_map_enhanced.get(result['config']['name'],
-                                                           result['config']['name'])  # Use mapped name
-                serializable_results[exp_name] = {
-                    'config': result['config'],
-                    'final_auc': result['final_auc'],
-                    'train_losses': result['train_losses'],
-                    'val_aucs': result['val_aucs'],
-                    'comprehensive_score': comprehensive_scores[methods.index(display_name)]
-                    # Use mapped name for index
-                }
-            json.dump(serializable_results, f, indent=2, ensure_ascii=False)
-
-        print(f"Enhanced results saved to: {save_dir}")
+        # Print enhanced results summary to console
+        print("\n" + "="*70)
+        print("ENHANCED ABLATION EXPERIMENT ANALYSIS")
+        print("="*70)
+        
+        ordered_exp_names = [k for k in self.ablation_configs.keys() if k in self.results]
+        
+        for exp_name in ordered_exp_names:
+            result = self.results[exp_name]
+            print(f"\n{result['config']['name']}:")
+            print(f"  AUC: {result['final_auc']:.4f}")
+            print(f"  Accuracy: {result['final_results'].get('accuracy', 0.0):.4f}")
+            if 'comprehensive_score' in locals():
+                idx = methods.index(plot_label_map_enhanced.get(result['config']['name'], result['config']['name']))
+                print(f"  Comprehensive Score: {comprehensive_scores[idx]:.4f}")
+        
+        print("="*70)
 
     def print_analysis_report(self):
         """Print analysis report"""
@@ -2052,7 +2058,7 @@ def main():
     ablation_exp.print_analysis_report()
 
     print("\n🎉 BloodMNIST ablation experiments completed!")
-    print("✅ All metrics (AUC, Accuracy) have been evaluated and visualized")
+    print("✅ All metrics (AUC, Accuracy) have been evaluated and displayed")
 
 
 if __name__ == "__main__":

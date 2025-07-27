@@ -1,7 +1,0 @@
-Rank,Method,AUC,Accuracy
-1,Exp2: Simple Graph Convolution,0.6845390124198718,0.8583984375
-2,Exp4a: Similarity Prior Only,0.6388158553685898,0.7978515625
-3,Exp3: No Spectral Pruning Regularization,0.6096441806891026,0.51171875
-4,Exp1: Fixed k-NN Hyperedge Generation,0.6066518930288461,0.55859375
-5,Complete Model (Baseline),0.5499862279647436,0.5439453125
-6,Exp4b: Attention Scoring Only,0.5071426782852564,0.2353515625
