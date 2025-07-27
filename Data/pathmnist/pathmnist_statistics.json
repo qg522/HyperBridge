@@ -1,0 +1,25 @@
+{
+  "text_statistics": {
+    "min_length": 9,
+    "max_length": 29,
+    "mean_length": 18.4867,
+    "std_length": 2.8712406917567885
+  },
+  "class_distribution": {
+    "adipose": 1030,
+    "mucus": 940,
+    "cancer_associated_stroma": 1031,
+    "smooth_muscle": 1337,
+    "colorectal_adenocarcinoma": 1413,
+    "lymphocytes": 1201,
+    "debris": 1161,
+    "background": 1022,
+    "normal_colon_mucosa": 865
+  },
+  "image_statistics": {
+    "mean_brightness": 0.002587238042150058,
+    "std_brightness": 0.00040615594637932615,
+    "mean_contrast": 0.20431253513740893,
+    "std_contrast": 0.06331687901845134
+  }
+}

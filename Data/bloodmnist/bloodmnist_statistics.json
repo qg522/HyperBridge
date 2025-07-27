@@ -1,0 +1,24 @@
+{
+  "text_statistics": {
+    "min_length": 14,
+    "max_length": 33,
+    "mean_length": 21.5178,
+    "std_length": 2.7590366362192444
+  },
+  "class_distribution": {
+    "platelet": 1359,
+    "immature_granulocytes": 1707,
+    "neutrophil": 1959,
+    "erythroblast": 926,
+    "eosinophil": 1800,
+    "monocyte": 837,
+    "basophil": 703,
+    "lymphocyte": 709
+  },
+  "image_statistics": {
+    "mean_brightness": 0.002809995942559897,
+    "std_brightness": 0.0001953840347439583,
+    "mean_contrast": 0.28033669215946166,
+    "std_contrast": 0.05485194522650287
+  }
+}

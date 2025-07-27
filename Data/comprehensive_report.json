@@ -1,0 +1,69 @@
+{
+  "generation_summary": {
+    "total_datasets": 3,
+    "datasets_created": [
+      "pathmnist",
+      "bloodmnist",
+      "organamnist"
+    ],
+    "creation_time": "2025-07-19T09:57:03.474288",
+    "total_samples": 30000
+  },
+  "dataset_details": {
+    "pathmnist": {
+      "name": "PathMNIST",
+      "description": "结直肠癌病理图像分类",
+      "total_samples": 10000,
+      "classes": 9,
+      "class_names": [
+        "adipose",
+        "background",
+        "debris",
+        "lymphocytes",
+        "mucus",
+        "smooth_muscle",
+        "normal_colon_mucosa",
+        "cancer_associated_stroma",
+        "colorectal_adenocarcinoma"
+      ],
+      "created_at": "2025-07-19T09:56:51.116014"
+    },
+    "bloodmnist": {
+      "name": "BloodMNIST",
+      "description": "血细胞形态学分类",
+      "total_samples": 10000,
+      "classes": 8,
+      "class_names": [
+        "basophil",
+        "eosinophil",
+        "erythroblast",
+        "immature_granulocytes",
+        "lymphocyte",
+        "monocyte",
+        "neutrophil",
+        "platelet"
+      ],
+      "created_at": "2025-07-19T09:56:55.274107"
+    },
+    "organamnist": {
+      "name": "OrgansMNIST",
+      "description": "腹部CT器官分割",
+      "total_samples": 10000,
+      "classes": 11,
+      "class_names": [
+        "bladder",
+        "femur-left",
+        "femur-right",
+        "heart",
+        "kidney-left",
+        "kidney-right",
+        "liver",
+        "lung-left",
+        "lung-right",
+        "pancreas",
+        "spleen"
+      ],
+      "created_at": "2025-07-19T09:56:59.401423"
+    }
+  }
+}

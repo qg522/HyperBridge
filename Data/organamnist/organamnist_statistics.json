@@ -1,0 +1,27 @@
+{
+  "text_statistics": {
+    "min_length": 16,
+    "max_length": 34,
+    "mean_length": 22.1087,
+    "std_length": 2.595589395493825
+  },
+  "class_distribution": {
+    "liver": 1782,
+    "lung-right": 1134,
+    "kidney-right": 1086,
+    "pancreas": 865,
+    "lung-left": 1136,
+    "kidney-left": 1151,
+    "bladder": 585,
+    "spleen": 1050,
+    "heart": 420,
+    "femur-right": 414,
+    "femur-left": 377
+  },
+  "image_statistics": {
+    "mean_brightness": 0.0018323905758738206,
+    "std_brightness": 0.0005993224894284622,
+    "mean_contrast": 0.6277590368223229,
+    "std_contrast": 0.392760127308885
+  }
+}

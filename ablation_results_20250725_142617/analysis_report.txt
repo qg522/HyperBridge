@@ -1,0 +1,69 @@
+================================================================================
+MULTIMODAL HYPERGRAPH ANOMALY DETECTION - ABLATION STUDY REPORT (BiLSTM Word Embeddings)
+================================================================================
+
+1. EXPERIMENT OVERVIEW
+----------------------------------------
+Total Experiments: 6
+Text Encoder Used for ALL experiments: BiLSTM with Word Embeddings
+Report Generated: 2025-07-25 14:26:19
+
+2. PERFORMANCE SUMMARY
+----------------------------------------
+Complete Model (Baseline):
+  - AUC: 0.8916
+  - Accuracy: 0.9521
+  - Average: 0.9219
+
+Exp1: Fixed k-NN Hyperedge Generation:
+  - AUC: 0.6680
+  - Accuracy: 0.6377
+  - Average: 0.6529
+
+Exp2: Simple Graph Convolution:
+  - AUC: 0.6314
+  - Accuracy: 0.8145
+  - Average: 0.7229
+
+Exp3: No Spectral Pruning Regularization:
+  - AUC: 0.8429
+  - Accuracy: 0.9199
+  - Average: 0.8814
+
+Exp4a: Similarity Prior Only:
+  - AUC: 0.7342
+  - Accuracy: 0.8848
+  - Average: 0.8095
+
+Exp4b: Attention Scoring Only:
+  - AUC: 0.9034
+  - Accuracy: 0.9541
+  - Average: 0.9287
+
+3. BEST PERFORMERS
+----------------------------------------
+Best Performers by Metric:
+  - Best AUC: Exp4b: Attention Scoring Only (0.9034)
+  - Best Accuracy: Exp4b: Attention Scoring Only (0.9541)
+
+Overall Performance:
+  - Best Overall: Exp4b: Attention Scoring Only (Avg: 0.9287)
+
+4. KEY FINDINGS (All experiments use BiLSTM with Word Embeddings):
+----------------------------------------
+  - Original Baseline (Dynamic Hypergraph) AUC: 0.8916
+  - **Optimized Baseline (Similarity Prior Hypergraph) AUC: 0.0000**
+    -> Optimization attempt did not improve performance significantly compared to original baseline (Difference: -0.8916).
+
+  - Impact of other module changes (relative to Original Baseline with BiLSTM Word Embeddings):
+    - 'Exp4b: Attention Scoring Only': Gain in AUC: 0.0118
+    - 'Exp3: No Spectral Pruning Regularization': Drop in AUC: 0.0487
+    - 'Exp4a: Similarity Prior Only': Drop in AUC: 0.1574
+    - 'Exp1: Fixed k-NN Hyperedge Generation': Drop in AUC: 0.2236
+    - 'Exp2: Simple Graph Convolution': Drop in AUC: 0.2602
+
+  - **Most impactful change (largest absolute AUC difference from Original Baseline):**
+    -> 'Exp2: Simple Graph Convolution' (Drop of 0.2602)
+
+END OF REPORT
+================================================================================

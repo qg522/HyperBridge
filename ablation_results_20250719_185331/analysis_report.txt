@@ -1,0 +1,53 @@
+================================================================================
+MULTIMODAL HYPERGRAPH ANOMALY DETECTION - ABLATION STUDY REPORT
+================================================================================
+
+1. EXPERIMENT OVERVIEW
+----------------------------------------
+Total Experiments: 6
+Evaluation Metrics: AUC, Accuracy
+Report Generated: 2025-07-19 18:53:32
+
+2. PERFORMANCE SUMMARY
+----------------------------------------
+Complete Model (Baseline):
+  - AUC: 0.8040
+  - Accuracy: 0.9094
+  - Average: 0.8567
+
+Exp1: Fixed k-NN Hyperedge Generation:
+  - AUC: 0.8306
+  - Accuracy: 0.9250
+  - Average: 0.8778
+
+Exp2: Simple Graph Convolution:
+  - AUC: 0.7975
+  - Accuracy: 0.9187
+  - Average: 0.8581
+
+Exp3: No Spectral Pruning Regularization:
+  - AUC: 0.8088
+  - Accuracy: 0.9281
+  - Average: 0.8685
+
+Exp4a: Similarity Prior Only:
+  - AUC: 0.8556
+  - Accuracy: 0.9250
+  - Average: 0.8903
+
+Exp4b: Attention Scoring Only:
+  - AUC: 0.8841
+  - Accuracy: 0.9344
+  - Average: 0.9092
+
+3. BEST PERFORMERS
+----------------------------------------
+Best Performers by Metric:
+  - Best AUC: Exp4b: Attention Scoring Only (0.8841)
+  - Best Accuracy: Exp4b: Attention Scoring Only (0.9344)
+
+Overall Performance:
+  - Best Overall: Exp4b: Attention Scoring Only (Avg: 0.9092)
+
+END OF REPORT
+================================================================================

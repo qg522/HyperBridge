@@ -1,0 +1,7 @@
+Rank,Method,AUC,Accuracy
+1,Complete Model (Baseline),0.0,0.0
+2,Exp1: Fixed k-NN Hyperedge Generation,0.0,0.0
+3,Exp2: Simple Graph Convolution,0.0,0.0
+4,Exp3: No Spectral Pruning Regularization,0.0,0.0
+5,Exp4a: Similarity Prior Only,0.0,0.0
+6,Exp4b: Attention Scoring Only,0.0,0.0
