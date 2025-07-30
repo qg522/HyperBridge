@@ -15,112 +15,17 @@ from datetime import datetime
 import jieba  # 新增：导入 jieba 用于中文分词
 import random
 
+# 添加项目根目录到Python路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+
+# 导入自定义模块
+from models.modules.hyper_generator import HybridHyperedgeGenerator
+from models.modules.wavelet_cheb_conv import WaveletChebConv
+from models.modules.pruning_regularizer import SpectralCutRegularizer
+
 warnings.filterwarnings('ignore')
-
-# ====================================================================================
-# START: REQUIRED MODULES / PLACEHOLDERS (确保这些类的定义存在并正确)
-# ====================================================================================
-
-# Placeholder for HybridHyperedgeGenerator (来自 models.modules.hyper_generator)
-class HybridHyperedgeGenerator(nn.Module):
-    def __init__(self, num_modalities, input_dims, hidden_dim, top_k, threshold):
-        super().__init__()
-        self.modality_projections = nn.ModuleList([
-            nn.Sequential(nn.Linear(dim, hidden_dim), nn.ReLU()) for dim in input_dims
-        ])
-        self.att_scorer = nn.Linear(hidden_dim * num_modalities, 1)
-        self.top_k = top_k
-        self.threshold = threshold
-
-    def forward(self, features_list):
-        batch_size = features_list[0].shape[0]
-        device = features_list[0].device
-
-        projected_features = [proj(feat) for proj, feat in zip(self.modality_projections, features_list)]
-        combined_features = torch.cat(projected_features, dim=1)
-        attention_scores = torch.sigmoid(self.att_scorer(combined_features).squeeze())  # Sigmoid on attention scores
-
-        normalized_combined_features = F.normalize(torch.cat(features_list, dim=1), dim=1)
-        similarity = torch.mm(normalized_combined_features, normalized_combined_features.t())
-
-        num_hyperedges = batch_size
-        H_final = torch.zeros(batch_size, num_hyperedges, device=device)
-
-        actual_top_k = min(self.top_k, batch_size)
-        _, top_k_indices = torch.topk(similarity, actual_top_k, dim=1)
-
-        for i in range(batch_size):
-            H_final[i, i] = 1.0
-            for neighbor_idx in top_k_indices[i]:
-                if neighbor_idx < batch_size:
-                    H_final[neighbor_idx, i] = 1.0
-
-        for i in range(num_hyperedges):
-            if H_final[:, i].sum() == 0:
-                H_final[i, i] = 1.0
-
-        edge_weights = attention_scores
-        if edge_weights.shape[0] != num_hyperedges:
-            # Fallback if dimensions don't match, or use a more robust weighting
-            edge_weights = torch.ones(num_hyperedges, device=device) * (
-                attention_scores.mean() if attention_scores.numel() > 0 else 1.0)
-
-        edge_weights = torch.clamp(edge_weights, min=1e-8)
-
-        return H_final, edge_weights
-
-
-# Corrected WaveletChebConv (已修正过维度问题)
-class WaveletChebConv(nn.Module):
-    def __init__(self, in_dim, out_dim, K, tau):
-        super().__init__()
-        self.linear = nn.Linear(in_dim, out_dim)
-        self.K = K
-        self.tau = tau
-
-    def forward(self, x, L):
-        if self.K == 0:
-            return self.linear(x)
-
-        Tx_0 = x
-        Tx_1 = torch.mm(L, x)
-
-        cheb_terms = [Tx_0, Tx_1]
-
-        for k in range(2, self.K):
-            Tx_k = 2 * torch.mm(L, cheb_terms[-1]) - cheb_terms[-2]
-            cheb_terms.append(Tx_k)
-
-        summed_cheb_output = torch.sum(torch.stack(cheb_terms, dim=0), dim=0)
-
-        return self.linear(summed_cheb_output)
-
-
-# Placeholder for SpectralCutRegularizer
-class SpectralCutRegularizer(nn.Module):
-    def __init__(self, use_rayleigh=True, reduction='mean'):
-        super().__init__()
-        self.use_rayleigh = use_rayleigh
-        self.reduction = reduction
-
-    def forward(self, representations, H, Dv, De):
-        if self.use_rayleigh:
-            if representations.numel() == 0:
-                return torch.tensor(0.0, device=representations.device)
-            reg_loss = torch.norm(representations, p=2)
-            if self.reduction == 'mean':
-                reg_loss = reg_loss.mean()
-            elif self.reduction == 'sum':
-                reg_loss = reg_loss.sum()
-            return reg_loss * 0.01
-        else:
-            return torch.tensor(0.0, device=representations.device)
-
-
-# ====================================================================================
-# END: REQUIRED MODULES / PLACEHOLDERS
-# ====================================================================================
-
 
 # 升级后的 BiLSTM 文本编码器类 - 接受词嵌入序列
 class BiLSTMAwareTextEncoder(nn.Module):
@@ -1263,10 +1168,10 @@ class AblationExperiment:
             'text_dim': 64,
 
             # =================== 坚定地修改以下三个参数 ===================
-            'top_k': 5,  # 必须修改。从10改为5，构建稀疏高质量的图。
-            'cheb_k': 3,  # 必须修改。从10改为3，聚焦局部特征，防止过平滑。
-            'learning_rate': 0.0005,  # 必须修改。从0.001改为0.0005，稳定训练过程。
-            # ==========================================================
+            'top_k': 8, 
+            'cheb_k': 10,  
+            'learning_rate': 0.0005,
+ 
 
             'threshold': 0.6,  # 此参数可保持不变
             'k_nearest': 3,
@@ -1323,48 +1228,58 @@ class AblationExperiment:
             },
         }
 
-    def run_experiment(self, experiment_name, epochs=30):
-        """运行单个消融实验"""
+    def run_experiment(self, experiment_name, epochs=30, num_runs=3):
+        """运行单个消融实验（多次运行取平均值）"""
         print(f"\n{'=' * 20} {self.ablation_configs[experiment_name]['name']} {'=' * 20}")
+        print(f"🔄 将运行 {num_runs} 次实验并计算平均结果")
 
         ablation_config = self.ablation_configs[experiment_name]
+        
+        # 存储所有运行的结果
+        all_train_losses = []
+        all_val_metrics = []
+        all_final_results = []
+        all_aucs = []
+        all_accuracies = []
 
-        try:
-            model = AblationAnomalyDetector(self.base_config, ablation_config).to(self.device)
-            print(f"DEBUG: All experiments now using BiLSTM Text Encoder with Word Embeddings.")
+        successful_runs = 0
+        
+        for run_idx in range(num_runs):
+            print(f"\n🏃‍♂️ 开始第 {run_idx + 1}/{num_runs} 次运行...")
+            
+            try:
+                # 每次运行都创建新的模型实例
+                model = AblationAnomalyDetector(self.base_config, ablation_config).to(self.device)
+                trainer = AblationTrainer(model, self.base_config, self.device)
 
-            trainer = AblationTrainer(model, self.base_config, self.device)
+                print(f"Starting training for {epochs} epochs...")
+                train_losses, val_metrics = trainer.train(epochs, train_batches=15, val_batches=5)
+                final_results = trainer.evaluate_testset(num_batches=10)
 
-            print(f"Starting training for {epochs} epochs...")
+                # 收集结果
+                all_train_losses.append(train_losses)
+                all_val_metrics.append(val_metrics)
+                all_final_results.append(final_results)
+                all_aucs.append(final_results['auc'])
+                all_accuracies.append(final_results['accuracy'])
+                
+                successful_runs += 1
+                
+                print(f"✅ 第 {run_idx + 1} 次运行完成 - AUC: {final_results['auc']:.4f}, "
+                      f"Accuracy: {final_results['accuracy']:.4f}")
 
-            train_losses, val_metrics = trainer.train(epochs, train_batches=15, val_batches=5)
+            except Exception as e:
+                print(f"❌ 第 {run_idx + 1} 次运行失败: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
 
-            final_results = trainer.evaluate_testset(num_batches=10)
-
-            self.results[experiment_name] = {
-                'config': ablation_config,
-                'train_losses': train_losses,
-                'val_metrics': val_metrics,
-                'final_results': final_results,
-                'val_aucs': [m['auc'] for m in val_metrics],
-                'final_auc': final_results['auc'],
-            }
-
-            print(f"Experiment {ablation_config['name']} completed")
-            print(f"Final Results - AUC: {final_results['auc']:.4f}, "
-                  f"Accuracy: {final_results['accuracy']:.4f}")
-
-            return final_results
-
-        except Exception as e:
-            print(f"Experiment {experiment_name} failed: {e}")
-            import traceback
-            traceback.print_exc()
-
+        if successful_runs == 0:
+            print(f"❌ 所有 {num_runs} 次运行都失败了")
             default_results = {
                 'auc': 0.0,
                 'accuracy': 0.0,
-                'error': str(e)
+                'error': 'All runs failed'
             }
 
             self.results[experiment_name] = {
@@ -1374,9 +1289,73 @@ class AblationExperiment:
                 'final_results': default_results,
                 'val_aucs': [],
                 'final_auc': 0.0,
+                'run_details': {
+                    'num_runs': num_runs,
+                    'successful_runs': 0,
+                    'individual_results': []
+                }
             }
-
             return default_results
+
+        # 计算平均结果
+        print(f"\n📊 计算 {successful_runs} 次成功运行的平均结果...")
+        
+        # 计算平均最终结果
+        avg_auc = np.mean(all_aucs)
+        avg_accuracy = np.mean(all_accuracies)
+        std_auc = np.std(all_aucs)
+        std_accuracy = np.std(all_accuracies)
+        
+        # 计算平均训练损失（取相同长度的部分）
+        min_train_length = min(len(losses) for losses in all_train_losses)
+        avg_train_losses = []
+        for epoch_idx in range(min_train_length):
+            epoch_losses = [losses[epoch_idx] for losses in all_train_losses]
+            avg_train_losses.append(np.mean(epoch_losses))
+        
+        # 计算平均验证指标
+        min_val_length = min(len(metrics) for metrics in all_val_metrics)
+        avg_val_metrics = []
+        for val_idx in range(min_val_length):
+            val_aucs = [metrics[val_idx]['auc'] for metrics in all_val_metrics]
+            val_accs = [metrics[val_idx]['accuracy'] for metrics in all_val_metrics]
+            avg_val_metrics.append({
+                'auc': np.mean(val_aucs),
+                'accuracy': np.mean(val_accs)
+            })
+
+        avg_final_results = {
+            'auc': avg_auc,
+            'accuracy': avg_accuracy,
+            'auc_std': std_auc,
+            'accuracy_std': std_accuracy
+        }
+
+        # 存储结果
+        self.results[experiment_name] = {
+            'config': ablation_config,
+            'train_losses': avg_train_losses,
+            'val_metrics': avg_val_metrics,
+            'final_results': avg_final_results,
+            'val_aucs': [m['auc'] for m in avg_val_metrics],
+            'final_auc': avg_auc,
+            'run_details': {
+                'num_runs': num_runs,
+                'successful_runs': successful_runs,
+                'individual_aucs': all_aucs,
+                'individual_accuracies': all_accuracies,
+                'individual_results': all_final_results
+            }
+        }
+
+        print(f"🎯 实验 {ablation_config['name']} 完成")
+        print(f"📈 平均结果 ({successful_runs} 次运行):")
+        print(f"   AUC: {avg_auc:.4f} ± {std_auc:.4f}")
+        print(f"   Accuracy: {avg_accuracy:.4f} ± {std_accuracy:.4f}")
+        print(f"   个体AUC: {[f'{auc:.4f}' for auc in all_aucs]}")
+        print(f"   个体Accuracy: {[f'{acc:.4f}' for acc in all_accuracies]}")
+
+        return avg_final_results
 
     def run_all_experiments(self, epochs=30):
         """运行所有消融实验"""
@@ -1419,84 +1398,90 @@ class AblationExperiment:
 
         return self.results
 
-    def create_visualization(self, save_dir=None):
-        """Create comprehensive visualization results with AUC and Accuracy"""
+    def create_visualization(self):
+        """Create comprehensive visualization results with AUC and Accuracy (display only) including error bars"""
         if not self.results:
             print("No available experimental results")
             return
 
-        if save_dir is None:
-            save_dir = f"ablation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        os.makedirs(save_dir, exist_ok=True)
-
         # Define a mapping for shorter, readable plot labels
         plot_label_map = {
-            'Original Baseline (Dynamic Hypergraph, BiLSTM Word Embeddings)': 'Original Base',
-            'Optimized Baseline (Similarity Prior Hypergraph, BiLSTM Word Embeddings)': 'Optimized Base',
-            'Exp1: Fixed k-NN Hyperedge Generation (BiLSTM Word Embeddings)': 'Exp1: Fixed k-NN',
-            'Exp2: Simple Graph Convolution (BiLSTM Word Embeddings)': 'Exp2: Simple GCN',
-            'Exp3: No Spectral Pruning Regularization (BiLSTM Word Embeddings)': 'Exp3: No SpecReg',
-            'Exp4a: Similarity Prior Only (BiLSTM Word Embeddings)': 'Exp4a: Sim Only',
-            'Exp4b: Attention Scoring Only (BiLSTM Word Embeddings)': 'Exp4b: Att Only',
+            'Complete Model (Baseline)': 'Complete Model',
+            'Exp1: Fixed k-NN Hyperedge Generation': 'Exp1: Fixed k-NN',
+            'Exp2: Simple Graph Convolution': 'Exp2: Simple GCN',
+            'Exp3: No Spectral Pruning Regularization': 'Exp3: No SpecReg',
+            'Exp4a: Similarity Prior Only': 'Exp4a: Sim Only',
+            'Exp4b: Attention Scoring Only': 'Exp4b: Att Only',
         }
 
         methods = []
         aucs = []
         accuracies = []
+        combined_scores = []
+        auc_stds = []
+        accuracy_stds = []
 
         ordered_exp_names = [k for k in self.ablation_configs.keys() if k in self.results]
 
         for exp_name in ordered_exp_names:
             result = self.results[exp_name]
             config = result['config']
-            methods.append(plot_label_map.get(config['name'], config['name']))  # Use mapped name
-            aucs.append(result['final_results'].get('auc', 0.0))
-            accuracies.append(result['final_results'].get('accuracy', 0.0))
+            methods.append(plot_label_map.get(config['name'], config['name']))
+            auc = result['final_results'].get('auc', 0.0)
+            accuracy = result['final_results'].get('accuracy', 0.0)
+            auc_std = result['final_results'].get('auc_std', 0.0)
+            accuracy_std = result['final_results'].get('accuracy_std', 0.0)
+            
+            aucs.append(auc)
+            accuracies.append(accuracy)
+            auc_stds.append(auc_std)
+            accuracy_stds.append(accuracy_std)
+            # 50% AUC + 50% Accuracy for combined ranking
+            combined_scores.append((auc + accuracy) / 2)
 
-            # Adjust figure size for better readability
-        plt.figure(figsize=(18, 12))  # Increased figure size
+        plt.figure(figsize=(18, 12))
 
-        # Subplot 1: Performance Comparison Bar Chart
+        # Subplot 1: Performance Comparison Bar Chart with Combined Score and Error Bars
         plt.subplot(2, 3, 1)
         x = np.arange(len(methods))
-        width = 0.35
+        width = 0.25
 
-        bars1 = plt.bar(x - width / 2, aucs, width, label='AUC', color='skyblue', alpha=0.8)
-        bars2 = plt.bar(x + width / 2, accuracies, width, label='Accuracy', color='lightgreen', alpha=0.8)
+        bars1 = plt.bar(x - width, aucs, width, label='AUC', color='skyblue', alpha=0.8, yerr=auc_stds, capsize=3)
+        bars2 = plt.bar(x, accuracies, width, label='Accuracy', color='lightgreen', alpha=0.8, yerr=accuracy_stds, capsize=3)
+        combined_stds = [(auc_std + acc_std) / 2 for auc_std, acc_std in zip(auc_stds, accuracy_stds)]
+        bars3 = plt.bar(x + width, combined_scores, width, label='Combined (50%AUC+50%ACC)', color='orange', alpha=0.8, yerr=combined_stds, capsize=3)
 
-        plt.ylabel('Score', fontsize=10)  # Adjusted fontsize
-        plt.title('Performance Comparison', fontsize=12)  # Adjusted fontsize
-        plt.xticks(x, methods, rotation=45, ha='right', fontsize=8)  # Use shorter method names, adjusted fontsize
+        plt.ylabel('Score', fontsize=10)
+        plt.title('Performance Comparison (with Standard Deviation)', fontsize=12)
+        plt.xticks(x, methods, rotation=45, ha='right', fontsize=8)
         plt.ylim(0, 1)
-        plt.legend(fontsize=9)  # Adjusted fontsize
+        plt.legend(fontsize=9)
         plt.grid(True, alpha=0.3, axis='y')
 
-        for bars in [bars1, bars2]:
-            for bar in bars:
-                height = bar.get_height()
-                plt.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
-                         f'{height:.3f}', ha='center', va='bottom', fontsize=7)  # Adjusted fontsize
+        for i, (auc, acc, combined) in enumerate(zip(aucs, accuracies, combined_scores)):
+            plt.text(i - width, auc + auc_stds[i] + 0.01, f'{auc:.3f}±{auc_stds[i]:.3f}', ha='center', va='bottom', fontsize=6)
+            plt.text(i, acc + accuracy_stds[i] + 0.01, f'{acc:.3f}±{accuracy_stds[i]:.3f}', ha='center', va='bottom', fontsize=6)
+            plt.text(i + width, combined + combined_stds[i] + 0.01, f'{combined:.3f}', ha='center', va='bottom', fontsize=6)
 
-        # Subplot 2: AUC Comparison
+        # Subplot 2: AUC Comparison with Error Bars
         plt.subplot(2, 3, 2)
-        bars = plt.bar(range(len(methods)), aucs, color='skyblue', alpha=0.8)
+        bars = plt.bar(range(len(methods)), aucs, color='skyblue', alpha=0.8, yerr=auc_stds, capsize=4)
         plt.ylabel('AUC Score', fontsize=10)
-        plt.title('AUC Comparison', fontsize=12)
+        plt.title('AUC Comparison (with Std Dev)', fontsize=12)
         plt.xticks(range(len(methods)), methods, rotation=45, ha='right', fontsize=8)
         plt.ylim(0, 1)
-        for i, v in enumerate(aucs):
-            plt.text(i, v + 0.01, f'{v:.3f}', ha='center', va='bottom', fontsize=7)
+        for i, (v, std) in enumerate(zip(aucs, auc_stds)):
+            plt.text(i, v + std + 0.01, f'{v:.3f}±{std:.3f}', ha='center', va='bottom', fontsize=7)
 
-        # Subplot 3: Accuracy Comparison
+        # Subplot 3: Accuracy Comparison with Error Bars
         plt.subplot(2, 3, 3)
-        bars = plt.bar(range(len(methods)), accuracies, color='lightgreen', alpha=0.8)
+        bars = plt.bar(range(len(methods)), accuracies, color='lightgreen', alpha=0.8, yerr=accuracy_stds, capsize=4)
         plt.ylabel('Accuracy', fontsize=10)
-        plt.title('Accuracy Comparison', fontsize=12)
+        plt.title('Accuracy Comparison (with Std Dev)', fontsize=12)
         plt.xticks(range(len(methods)), methods, rotation=45, ha='right', fontsize=8)
         plt.ylim(0, 1)
-        for i, v in enumerate(accuracies):
-            plt.text(i, v + 0.01, f'{v:.3f}', ha='center', va='bottom', fontsize=7)
+        for i, (v, std) in enumerate(zip(accuracies, accuracy_stds)):
+            plt.text(i, v + std + 0.01, f'{v:.3f}±{std:.3f}', ha='center', va='bottom', fontsize=7)
 
         # Subplot 4: Training Loss Curves
         plt.subplot(2, 3, 4)
@@ -1508,7 +1493,7 @@ class AblationExperiment:
         plt.xlabel('Epoch', fontsize=10)
         plt.ylabel('Training Loss', fontsize=10)
         plt.title('Training Loss Curves', fontsize=12)
-        plt.legend(loc='upper right', bbox_to_anchor=(1.0, 1.0), ncol=1, fontsize=8)  # Adjust legend position
+        plt.legend(loc='upper right', bbox_to_anchor=(1.0, 1.0), ncol=1, fontsize=8)
         plt.grid(True, alpha=0.3)
 
         # Subplot 5: Validation AUC Trends
@@ -1520,436 +1505,56 @@ class AblationExperiment:
                 epochs = range(0, len(result['train_losses']), 10)[:len(val_aucs)]
                 plt.plot(epochs, val_aucs, 'o-',
                          label=plot_label_map.get(result['config']['name'], result['config']['name']),
-                         linewidth=2, markersize=4)  # Adjusted marker size
+                         linewidth=2, markersize=4)
         plt.xlabel('Epoch', fontsize=10)
         plt.ylabel('Validation AUC', fontsize=10)
         plt.title('Validation AUC Trends', fontsize=12)
-        plt.legend(loc='upper right', bbox_to_anchor=(1.0, 1.0), ncol=1, fontsize=8)  # Adjust legend position
+        plt.legend(loc='upper right', bbox_to_anchor=(1.0, 1.0), ncol=1, fontsize=8)
         plt.grid(True, alpha=0.3)
 
-        # Subplot 6: Performance Ranking (Horizontal Bar Chart)
+        # Subplot 6: Performance Ranking by Combined Score (50%AUC+50%ACC)
         plt.subplot(2, 3, 6)
-        sorted_indices = np.argsort(aucs)[::-1]
+        sorted_indices = np.argsort(combined_scores)[::-1]
         sorted_methods = [methods[i] for i in sorted_indices]
-        sorted_aucs = [aucs[i] for i in sorted_indices]
+        sorted_combined_scores = [combined_scores[i] for i in sorted_indices]
 
-        bars = plt.barh(range(len(sorted_methods)), sorted_aucs)
-        plt.xlabel('AUC Score', fontsize=10)
+        bars = plt.barh(range(len(sorted_methods)), sorted_combined_scores, color='orange', alpha=0.8)
+        plt.xlabel('Combined Score (50%AUC+50%ACC)', fontsize=10)
         plt.title('Performance Ranking', fontsize=12)
-        plt.yticks(range(len(sorted_methods)), sorted_methods, fontsize=8)  # Use shorter method names
+        plt.yticks(range(len(sorted_methods)), sorted_methods, fontsize=8)
+
+        for i, v in enumerate(sorted_combined_scores):
+            plt.text(v + 0.005, i, f'{v:.3f}', va='center', fontsize=7)
+
+        plt.tight_layout()
+        plt.show()  # Display the plot instead of saving
+
+        # Display performance summary in console
+        self._print_performance_summary(methods, aucs, accuracies, combined_scores, auc_stds, accuracy_stds)
+
+    def _print_performance_summary(self, methods, aucs, accuracies, combined_scores, auc_stds, accuracy_stds):
+        """Print performance summary to console with combined ranking and standard deviations"""
+        print("\n" + "="*90)
+        print("ABLATION EXPERIMENT PERFORMANCE SUMMARY (Multiple Runs Average ± Std)")
+        print("="*90)
+        
+        # Create a list of tuples for sorting by combined score
+        results = list(zip(methods, aucs, accuracies, combined_scores, auc_stds, accuracy_stds))
+        # Sort by combined score (50%AUC+50%ACC) in descending order
+        results.sort(key=lambda x: x[3], reverse=True)
+        
+        print(f"{'Rank':<4} {'Method':<20} {'AUC (±std)':<15} {'Accuracy (±std)':<18} {'Combined':<10}")
+        print("-" * 85)
+        
+        for rank, (method, auc, acc, combined, auc_std, acc_std) in enumerate(results, 1):
+            print(f"{rank:<4} {method:<20} {auc:.4f}±{auc_std:.4f}    {acc:.4f}±{acc_std:.4f}      {combined:<10.4f}")
+        
+        print("\n" + "="*90)
+        print("📊 RANKING CRITERIA: 50% AUC + 50% Accuracy")
+        print("📈 Results are averaged over multiple runs with standard deviation shown")
+        print("="*90)
 
-        for i, v in enumerate(sorted_aucs):
-            plt.text(v + 0.005, i, f'{v:.3f}', va='center', fontsize=7)  # Adjusted text position and fontsize
 
-        plt.tight_layout(
-            rect=[0, 0.03, 1, 0.95])  # Adjust tight_layout to prevent title/label overlap with main title if needed
-        plt.savefig(os.path.join(save_dir, 'ablation_comparison.png'), dpi=300, bbox_inches='tight')
-        plt.close()
-
-        self._create_performance_table(save_dir, methods, aucs, accuracies)
-        self._generate_analysis_report(save_dir, methods, aucs, accuracies)
-
-        print(f"Results saved to: {save_dir}")
-
-    # === _create_performance_table 和 _generate_analysis_report 保持不变，它们应该在 AblationExperiment 类中与 create_visualization 同级别 ===
-    def _create_performance_table(self, save_dir, methods, aucs, accuracies):
-        """创建性能对比表格"""
-        table_path = os.path.join(save_dir, 'performance_table.csv')
-
-        import pandas as pd
-        data = {
-            'Method': methods,
-            'AUC': aucs,
-            'Accuracy': accuracies
-        }
-
-        df = pd.DataFrame(data)
-        df = df.sort_values('AUC', ascending=False)
-        df['Rank'] = range(1, len(df) + 1)
-        df = df[['Rank', 'Method', 'AUC', 'Accuracy']]
-
-        df.to_csv(table_path, index=False)
-        print(f"Performance table saved to: {table_path}")
-
-    def _generate_analysis_report(self, save_dir, methods, aucs, accuracies):
-        """生成分析报告（只包含AUC和Accuracy）"""
-        report_path = os.path.join(save_dir, 'analysis_report.txt')
-
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write("=" * 80 + "\n")
-            f.write("MULTIMODAL HYPERGRAPH ANOMALY DETECTION - ABLATION STUDY REPORT (BiLSTM Word Embeddings)\n")
-            f.write("=" * 80 + "\n\n")
-
-            f.write("1. EXPERIMENT OVERVIEW\n")
-            f.write("-" * 40 + "\n")
-            f.write(f"Total Experiments: {len(methods)}\n")
-            f.write(f"Text Encoder Used for ALL experiments: BiLSTM with Word Embeddings\n")
-            f.write(f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-
-            f.write("2. PERFORMANCE SUMMARY\n")
-            f.write("-" * 40 + "\n")
-            for i, method in enumerate(methods):
-                f.write(f"{method}:\n")
-                f.write(f"  - AUC: {aucs[i]:.4f}\n")
-                f.write(f"  - Accuracy: {accuracies[i]:.4f}\n")
-                f.write(f"  - Average: {(aucs[i] + accuracies[i]) / 2:.4f}\n\n")
-
-            f.write("3. BEST PERFORMERS\n")
-            f.write("-" * 40 + "\n")
-
-            best_auc_idx = np.argmax(aucs)
-            best_acc_idx = np.argmax(accuracies)
-
-            f.write("Best Performers by Metric:\n")
-            f.write(f"  - Best AUC: {methods[best_auc_idx]} ({aucs[best_auc_idx]:.4f})\n")
-            f.write(f"  - Best Accuracy: {methods[best_acc_idx]} ({accuracies[best_acc_idx]:.4f})\n\n")
-
-            avg_scores = [(a + b) / 2 for a, b in zip(aucs, accuracies)]
-            best_overall_idx = np.argmax(avg_scores)
-
-            f.write("Overall Performance:\n")
-            f.write(f"  - Best Overall: {methods[best_overall_idx]} (Avg: {avg_scores[best_overall_idx]:.4f})\n\n")
-
-            f.write("4. KEY FINDINGS (All experiments use BiLSTM with Word Embeddings):\n")
-            f.write("-" * 40 + "\n")
-
-            _results_for_analysis = {k: v for k, v in self.results.items() if k in self.ablation_configs}
-            _sorted_results_items = sorted(_results_for_analysis.items(), key=lambda x: x[1].get('final_auc', 0.0),
-                                           reverse=True)  # Fix sorted reverse
-
-            original_baseline_auc = self.results.get('original_baseline_bilstm', {}).get('final_auc', 0.0)
-            optimized_baseline_auc = self.results.get('optimized_baseline_bilstm', {}).get('final_auc', 0.0)
-
-            f.write(f"  - Original Baseline (Dynamic Hypergraph) AUC: {original_baseline_auc:.4f}\n")
-            f.write(f"  - **Optimized Baseline (Similarity Prior Hypergraph) AUC: {optimized_baseline_auc:.4f}**\n")
-            if optimized_baseline_auc > original_baseline_auc:
-                f.write(
-                    f"    -> Performance improved by: {optimized_baseline_auc - original_baseline_auc:.4f} (indicating 'Similarity Prior' is a beneficial hypergraph strategy with BiLSTM).\n")
-            else:
-                f.write(
-                    f"    -> Optimization attempt did not improve performance significantly compared to original baseline (Difference: {optimized_baseline_auc - original_baseline_auc:.4f}).\n")
-
-            max_drop = 0
-            most_impactful_ablation = None
-
-            f.write(
-                "\n  - Impact of other module changes (relative to Original Baseline with BiLSTM Word Embeddings):\n")
-            for exp_name, result in _sorted_results_items:
-                if exp_name not in ['original_baseline_bilstm', 'optimized_baseline_bilstm']:
-                    current_auc = result.get('final_auc', 0.0)
-                    drop = original_baseline_auc - current_auc
-                    impact_type = "Drop" if drop > 0 else "Gain" if drop < 0 else "No Change"
-                    f.write(
-                        f"    - '{result['config']['name'].split('(')[0].strip()}': {impact_type} in AUC: {abs(drop):.4f}\n")
-                    if abs(drop) > abs(max_drop):
-                        max_drop = drop
-                        most_impactful_ablation = result['config']['name']
-
-            if most_impactful_ablation:
-                impact_type = "Drop" if max_drop > 0 else "Gain" if max_drop < 0 else "No Change"
-                f.write(f"\n  - **Most impactful change (largest absolute AUC difference from Original Baseline):**\n")
-                f.write(
-                    f"    -> '{most_impactful_ablation.split('(')[0].strip()}' ({impact_type} of {abs(max_drop):.4f})\n")
-
-            f.write("\nEND OF REPORT\n")
-            f.write("=" * 80 + "\n")
-
-        print(f"Analysis report saved to: {report_path}")
-
-    # === create_enhanced_visualization 也需要进行类似优化和位置修正 ===
-    def create_enhanced_visualization(self, save_dir=None):
-        """Create enhanced visualization results with anomaly type analysis"""
-        if not self.results:
-            print("No available experimental results")
-            return
-
-        if save_dir is None:
-            save_dir = f"enhanced_ablation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        os.makedirs(save_dir, exist_ok=True)
-
-        # Define a mapping for shorter, readable plot labels for enhanced viz
-        plot_label_map_enhanced = {
-            'Original Baseline (Dynamic Hypergraph, BiLSTM Word Embeddings)': 'Original',
-            'Optimized Baseline (Similarity Prior Hypergraph, BiLSTM Word Embeddings)': 'Optimized',
-            'Exp1: Fixed k-NN Hyperedge Generation (BiLSTM Word Embeddings)': 'Exp1_kNN',
-            'Exp2: Simple Graph Convolution (BiLSTM Word Embeddings)': 'Exp2_SGC',
-            'Exp3: No Spectral Pruning Regularization (BiLSTM Word Embeddings)': 'Exp3_NoReg',
-            'Exp4a: Similarity Prior Only (BiLSTM Word Embeddings)': 'Exp4a_Sim',
-            'Exp4b: Attention Scoring Only (BiLSTM Word Embeddings)': 'Exp4b_Att',
-        }
-
-        methods = []
-        aucs = []
-
-        ordered_exp_names = [k for k in self.ablation_configs.keys() if k in self.results]
-
-        for exp_name in ordered_exp_names:
-            result = self.results[exp_name]
-            config = result['config']
-            methods.append(plot_label_map_enhanced.get(config['name'], config['name']))  # Use mapped name
-            aucs.append(result['final_auc'])
-
-        plt.figure(figsize=(24, 18))  # Even larger figure size for enhanced plots
-
-        # 1. AUC Comparison Bar Chart (Enhanced)
-        plt.subplot(3, 4, 1)
-        colors = plt.cm.Set3(np.linspace(0, 1, len(methods)))
-        bars = plt.bar(range(len(methods)), aucs, color=colors, alpha=0.8, edgecolor='black')
-        plt.ylabel('AUC Score', fontsize=12)
-        plt.title('Ablation Study AUC Comparison', fontsize=14, fontweight='bold')
-        plt.xticks(range(len(methods)), methods, rotation=45, ha='right', fontsize=9)  # Use shorter method names
-        plt.ylim(0, 1)
-        plt.grid(True, alpha=0.3, axis='y')
-        for i, v in enumerate(aucs):
-            plt.text(i, v + 0.01, f'{v:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
-
-        # 2. Training Loss Curves (Enhanced)
-        plt.subplot(3, 4, 2)
-        for i, exp_name in enumerate(ordered_exp_names):
-            result = self.results[exp_name]
-            train_losses = result['train_losses']
-            plt.plot(train_losses,
-                     label=plot_label_map_enhanced.get(result['config']['name'], result['config']['name']),
-                     color=colors[i], linewidth=2)
-        plt.xlabel('Epoch', fontsize=12)
-        plt.ylabel('Training Loss', fontsize=12)
-        plt.title('Training Loss Convergence', fontsize=14, fontweight='bold')
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
-        plt.grid(True, alpha=0.3)
-
-        # 3. Validation AUC Trends (Enhanced)
-        plt.subplot(3, 4, 3)
-        for i, exp_name in enumerate(ordered_exp_names):
-            result = self.results[exp_name]
-            if 'val_metrics' in result and len(result['val_metrics']) > 0:
-                val_aucs = [m['auc'] for m in result['val_metrics']]
-                epochs = range(0, len(result['train_losses']), 10)[:len(val_aucs)]
-                plt.plot(epochs, val_aucs, 'o-',
-                         label=plot_label_map_enhanced.get(result['config']['name'], result['config']['name']),
-                         color=colors[i], linewidth=2, markersize=4)
-        plt.xlabel('Epoch', fontsize=12)
-        plt.ylabel('Validation AUC', fontsize=12)
-        plt.title('Validation AUC Trends', fontsize=14, fontweight='bold')
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
-        plt.grid(True, alpha=0.3)
-
-        # 4. Module Contribution Analysis (Enhanced)
-        plt.subplot(3, 4, 4)
-        if 'original_baseline_bilstm' in self.results:
-            baseline_auc = self.results['original_baseline_bilstm']['final_auc']
-            contributions = {}
-
-            for exp_name in ordered_exp_names:
-                if exp_name != 'original_baseline_bilstm':
-                    result = self.results[exp_name]
-                    drop = baseline_auc - result['final_auc']
-                    module_name = plot_label_map_enhanced.get(result['config']['name'],
-                                                              result['config']['name'])  # Use mapped name
-                    contributions[module_name] = drop
-
-            if contributions:
-                modules = list(contributions.keys())
-                drops = list(contributions.values())
-
-                colors_contrib = ['red' if d > 0.05 else 'orange' if d > 0.02 else 'yellow' for d in drops]
-                bars = plt.bar(modules, drops, color=colors_contrib, alpha=0.7, edgecolor='black')
-                plt.ylabel('AUC Performance Drop (Relative to Original Baseline)', fontsize=10)
-                plt.title('Module Importance Analysis', fontsize=14, fontweight='bold')
-                plt.xticks(rotation=45, ha='right', fontsize=9)
-                for bar, drop in zip(bars, drops):
-                    plt.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.002,
-                             f'{drop:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
-                plt.grid(True, alpha=0.3, axis='y')
-
-        # 5. Performance Stability Analysis (Box Plot)
-        plt.subplot(3, 4, 5)
-        performance_data = []
-        for exp_name in ordered_exp_names:
-            result = self.results[exp_name]
-            base_auc = result['final_auc']
-            # Simulate more realistic variance if needed, or stick to constant 0.02
-            simulated_runs = np.random.normal(base_auc, 0.005, 15)  # Reduced std to 0.005, increased runs to 15
-            performance_data.append(simulated_runs)
-
-        plt.boxplot(performance_data, labels=methods, patch_artist=True,
-                    boxprops=dict(facecolor='lightblue', color='blue'),
-                    medianprops=dict(color='red'))
-        plt.ylabel('AUC Score', fontsize=12)
-        plt.title('Performance Stability Analysis', fontsize=14, fontweight='bold')
-        plt.xticks(rotation=45, ha='right', fontsize=9)
-        plt.ylim(0.5, 1.0)  # Adjust ylim for high performance
-        plt.grid(True, alpha=0.3, axis='y')
-
-        # 6. Radar Chart (Enhanced)
-        plt.subplot(3, 4, 6, projection='polar')
-        angles = np.linspace(0, 2 * np.pi, len(methods), endpoint=False).tolist()
-        angles += angles[:1]
-
-        aucs_radar = aucs + [aucs[0]]
-
-        ax_radar = plt.gca()  # Get current axis for radar plot
-        ax_radar.plot(angles, aucs_radar, 'o-', linewidth=3, markersize=8, color='blue', alpha=0.7)
-        ax_radar.fill(angles, aucs_radar, alpha=0.25, color='blue')
-        ax_radar.set_xticks(angles[:-1])
-        ax_radar.set_xticklabels(methods, fontsize=9)  # Use shorter method names
-        ax_radar.set_ylim(0.5, 1.0)  # Adjust ylim for high performance
-        ax_radar.set_title('Performance Radar Chart', fontsize=14, fontweight='bold', pad=20)
-
-        # 7. Performance Ranking Table
-        plt.subplot(3, 4, 7)
-        plt.axis('off')  # Turn off axis for table
-        sorted_indices = np.argsort(aucs)[::-1]
-        sorted_methods_full = [methods[i] for i in sorted_indices]  # Use shorter names
-        sorted_aucs_full = [aucs[i] for i in sorted_indices]
-
-        # Prepare data for table - include rank, method name, AUC
-        table_data = []
-        for i, (method, auc) in enumerate(zip(sorted_methods_full, sorted_aucs_full)):
-            rank = i + 1
-            table_data.append([f'{rank}', method, f'{auc:.4f}'])
-
-        # Create table
-        table = plt.table(cellText=table_data,
-                          colLabels=['Rank', 'Method', 'AUC'],
-                          cellLoc='center',
-                          loc='center',
-                          colWidths=[0.1, 0.6, 0.2])  # Adjusted column widths
-        table.auto_set_font_size(False)
-        table.set_fontsize(10)
-        table.scale(1, 1.5)  # Scale table to fit
-        plt.title('Performance Ranking Table', fontsize=14, fontweight='bold', pad=20)
-
-        # 8. Efficiency-Performance Trade-off (Simulated)
-        plt.subplot(3, 4, 8)
-        # Simulate computational complexity (relative values)
-        complexity_map = {  # Adjust complexities to be more granular if known
-            'Original': 1.0,  # Original Baseline (Dynamic Hypergraph)
-            'Optimized': 1.0,  # Optimized Baseline (Similarity Prior) - assumed similar complexity
-            'Exp1_kNN': 0.7,  # Fixed k-NN - simpler hypergraph generation
-            'Exp2_SGC': 0.6,  # Simple GCN - simpler convolution
-            'Exp3_NoReg': 0.9,  # No Spectral Reg - slightly simpler
-            'Exp4a_Sim': 0.8,  # Similarity Only - simpler hypergraph scoring
-            'Exp4b_Att': 0.9,  # Attention Only - simpler hypergraph scoring
-        }
-
-        complexities = [complexity_map.get(m, 1.0) for m in methods]  # Use mapped names
-
-        plt.scatter(complexities, aucs, c=colors[:len(aucs)], s=200, alpha=0.7, edgecolors='black')
-        for i, (x, y, method) in enumerate(zip(complexities, aucs, methods)):
-            plt.annotate(method, (x, y), xytext=(5, 5), textcoords='offset points', fontsize=9)  # Use mapped names
-        plt.xlabel('Relative Computational Complexity', fontsize=12)
-        plt.ylabel('AUC Score', fontsize=12)
-        plt.title('Efficiency-Performance Trade-off', fontsize=14, fontweight='bold')
-        plt.grid(True, alpha=0.3)
-        plt.xlim(0.5, 1.1)  # Adjusted xlim based on complexity values
-        plt.ylim(0.5, 1.0)  # Adjusted ylim for high performance
-
-        # 9. Anomaly Type Detection Difficulty (placeholder)
-        plt.subplot(3, 4, 9)
-        anomaly_types = ['Structural', 'Contextual', 'Collective', 'Multimodal', 'Boundary']  # Capitalized
-        detection_rates = [0.85, 0.72, 0.68, 0.61, 0.58]
-
-        bars = plt.bar(anomaly_types, detection_rates, color='lightcoral', alpha=0.8, edgecolor='black')
-        plt.ylabel('Average Detection Rate', fontsize=12)
-        plt.title('Anomaly Type Detection Difficulty', fontsize=14, fontweight='bold')
-        plt.xticks(rotation=45, ha='right', fontsize=9)  # Rotated and adjusted fontsize
-        plt.ylim(0, 1)
-        for bar, rate in zip(bars, detection_rates):
-            plt.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
-                     f'{rate:.2f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
-        plt.grid(True, alpha=0.3, axis='y')
-
-        # 10. Learning Speed Comparison
-        plt.subplot(3, 4, 10)
-        for i, exp_name in enumerate(ordered_exp_names):
-            result = self.results[exp_name]
-            train_losses = result['train_losses']
-            learning_speed = []
-            for j in range(1, len(train_losses)):
-                speed = max(0, train_losses[j - 1] - train_losses[j])
-                learning_speed.append(speed)
-
-            epochs = range(1, len(learning_speed) + 1)
-            plt.plot(epochs, learning_speed,
-                     label=plot_label_map_enhanced.get(result['config']['name'], result['config']['name']),
-                     color=colors[i], linewidth=2)
-
-        plt.xlabel('Epoch', fontsize=12)
-        plt.ylabel('Learning Speed (Loss Reduction Rate)', fontsize=12)
-        plt.title('Learning Speed Comparison', fontsize=14, fontweight='bold')
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
-        plt.grid(True, alpha=0.3)
-
-        # 11. Error Analysis (placeholder)
-        plt.subplot(3, 4, 11)
-        methods_short_err = [m for m in methods]  # Use mapped names for consistency
-        false_positive = np.random.uniform(0.01, 0.05, len(methods_short_err))  # Smaller range for high perf
-        false_negative = np.random.uniform(0.01, 0.05, len(methods_short_err))  # Smaller range
-
-        x = np.arange(len(methods_short_err))
-        width = 0.35
-
-        bars1 = plt.bar(x - width / 2, false_positive, width, label='False Positive Rate', color='lightblue', alpha=0.8)
-        bars2 = plt.bar(x + width / 2, false_negative, width, label='False Negative Rate', color='lightgreen',
-                        alpha=0.8)
-
-        plt.ylabel('Error Rate', fontsize=12)
-        plt.title('Error Rate Analysis', fontsize=14, fontweight='bold')
-        plt.xticks(x, methods_short_err, rotation=45, ha='right', fontsize=9)
-        plt.legend(fontsize=9)
-        plt.grid(True, alpha=0.3, axis='y')
-        plt.ylim(0, 0.1)  # Adjusted ylim for error rates
-
-        # 12. Method Comprehensive Evaluation
-        plt.subplot(3, 4, 12)
-        comprehensive_scores = []
-        for i, exp_name in enumerate(ordered_exp_names):
-            result = self.results[exp_name]
-            auc_score = result['final_auc']
-            current_method_name = methods[i]  # Use mapped name
-            current_complexity_key = complexity_map.get(current_method_name, 1.0)  # Get complexity for mapped name
-
-            complexity_penalty = 1 - current_complexity_key
-            stability_score = np.random.uniform(0.95, 0.99)  # Simulate high stability for high perf
-
-            comprehensive = auc_score * 0.6 + complexity_penalty * 0.2 + stability_score * 0.2
-            comprehensive_scores.append(comprehensive)
-
-        # Sort for ranking display
-        sorted_comp_indices = np.argsort(comprehensive_scores)[::-1]
-        sorted_comp_methods = [methods[i] for i in sorted_comp_indices]
-        sorted_comp_scores = [comprehensive_scores[i] for i in sorted_comp_indices]
-
-        bars = plt.barh(range(len(sorted_comp_methods)), sorted_comp_scores, color=colors, alpha=0.8)
-        plt.xlabel('Comprehensive Score', fontsize=12)
-        plt.title('Method Comprehensive Evaluation', fontsize=14, fontweight='bold')
-        plt.yticks(range(len(sorted_comp_methods)), sorted_comp_methods, fontsize=9)
-        for i, v in enumerate(sorted_comp_scores):
-            plt.text(v + 0.01, i, f'{v:.3f}', va='center', fontweight='bold', fontsize=8)
-        plt.grid(True, alpha=0.3, axis='x')
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # Adjust overall tight_layout for enhanced plots
-        plt.savefig(os.path.join(save_dir, 'enhanced_ablation_analysis.png'), dpi=300, bbox_inches='tight')
-        plt.show()  # Display the enhanced plot
-
-        with open(os.path.join(save_dir, 'enhanced_results.json'), 'w', encoding='utf-8') as f:
-            serializable_results = {}
-            for exp_name in ordered_exp_names:
-                result = self.results[exp_name]
-                display_name = plot_label_map_enhanced.get(result['config']['name'],
-                                                           result['config']['name'])  # Use mapped name
-                serializable_results[exp_name] = {
-                    'config': result['config'],
-                    'final_auc': result['final_auc'],
-                    'train_losses': result['train_losses'],
-                    'val_aucs': result['val_aucs'],
-                    'comprehensive_score': comprehensive_scores[methods.index(display_name)]
-                    # Use mapped name for index
-                }
-            json.dump(serializable_results, f, indent=2, ensure_ascii=False)
-
-        print(f"Enhanced results saved to: {save_dir}")
 
     def print_analysis_report(self):
         """Print analysis report"""
@@ -1958,11 +1563,11 @@ class AblationExperiment:
             return
 
         print(f"\n{'=' * 60}")
-        print("Ablation Study Analysis Report (BiLSTM Word Embeddings)")
+        print("Ablation Study Analysis Report (Multiple Runs Average)")
         print(f"{'=' * 60}")
 
-        print(f"\nExperimental Results:")
-        print("-" * 50)
+        print(f"\nExperimental Results (Average ± Std from Multiple Runs):")
+        print("-" * 70)
         # 在这里重新计算 _sorted_results_items，确保其在当前方法中可用
         _results_for_analysis = {k: v for k, v in self.results.items() if k in self.ablation_configs}
         _sorted_results_items = sorted(_results_for_analysis.items(), key=lambda x: x[1].get('final_auc', 0.0),
@@ -1971,53 +1576,70 @@ class AblationExperiment:
         for exp_name, result in _sorted_results_items:
             config = result['config']
             auc = result['final_auc']
-            print(f"{config['name']:<70.70} | AUC: {auc:.4f}")
+            accuracy = result['final_results'].get('accuracy', 0.0)
+            auc_std = result['final_results'].get('auc_std', 0.0)
+            accuracy_std = result['final_results'].get('accuracy_std', 0.0)
+            
+            # 显示运行次数信息
+            run_details = result.get('run_details', {})
+            num_runs = run_details.get('successful_runs', 1)
+            
+            print(f"{config['name']:<50} | AUC: {auc:.4f}±{auc_std:.4f} | Acc: {accuracy:.4f}±{accuracy_std:.4f} | Runs: {num_runs}")
 
-        print(f"\nPerformance Ranking:")
+        print(f"\nPerformance Ranking (by AUC):")
         print("-" * 50)
         for rank, (exp_name, result) in enumerate(_sorted_results_items, 1):  # 使用重新定义的 _sorted_results_items
             config = result['config']
             auc = result['final_auc']
-            print(f"{rank}. {config['name']} (AUC: {auc:.4f})")
+            auc_std = result['final_results'].get('auc_std', 0.0)
+            run_details = result.get('run_details', {})
+            num_runs = run_details.get('successful_runs', 1)
+            print(f"{rank}. {config['name']} (AUC: {auc:.4f}±{auc_std:.4f}, {num_runs} runs)")
 
-        if 'original_baseline_bilstm' in self.results and 'optimized_baseline_bilstm' in self.results:
-            original_baseline_auc = self.results.get('original_baseline_bilstm', {}).get('final_auc', 0.0)
-            optimized_baseline_auc = self.results.get('optimized_baseline_bilstm', {}).get('final_auc', 0.0)
+        # 显示个体运行结果的详细信息
+        print(f"\n📊 Individual Run Details:")
+        print("-" * 50)
+        for exp_name, result in _sorted_results_items:
+            config = result['config']
+            run_details = result.get('run_details', {})
+            if 'individual_aucs' in run_details and 'individual_accuracies' in run_details:
+                individual_aucs = run_details['individual_aucs']
+                individual_accs = run_details['individual_accuracies']
+                print(f"\n{config['name']}:")
+                print(f"  Individual AUCs: {[f'{auc:.4f}' for auc in individual_aucs]}")
+                print(f"  Individual Accs: {[f'{acc:.4f}' for acc in individual_accs]}")
 
-            print(f"\nKey Findings (All experiments use BiLSTM with Word Embeddings):")
-            print("-" * 50)
+        if 'original_baseline_bilstm' in self.results:
+            original_baseline_result = self.results.get('original_baseline_bilstm', {})
+            original_baseline_auc = original_baseline_result.get('final_auc', 0.0)
+            original_baseline_std = original_baseline_result.get('final_results', {}).get('auc_std', 0.0)
 
-            print(f"  - Original Baseline (Dynamic Hypergraph) AUC: {original_baseline_auc:.4f}\n")
-            print(f"  - **Optimized Baseline (Similarity Prior Hypergraph) AUC: {optimized_baseline_auc:.4f}**\n")
-            if optimized_baseline_auc > original_baseline_auc:
-                print(
-                    f"    -> Performance improved by: {optimized_baseline_auc - original_baseline_auc:.4f} (indicating 'Similarity Prior' is a beneficial hypergraph strategy with BiLSTM).\n")
-            else:
-                print(
-                    f"    -> Optimization attempt did not improve performance significantly compared to original baseline (Difference: {optimized_baseline_auc - original_baseline_auc:.4f}).\n")
+            print(f"\nKey Findings (All experiments use BiLSTM with Word Embeddings, Multiple Runs):")
+            print("-" * 70)
+
+            print(f"  - Complete Model (Baseline) AUC: {original_baseline_auc:.4f}±{original_baseline_std:.4f}")
 
             max_drop = 0
             most_impactful_ablation = None
 
-            print("\n  - Impact of other module changes (relative to Original Baseline with BiLSTM Word Embeddings):\n")
+            print(f"\n  - Impact of module changes (relative to Complete Model Baseline):")
             for exp_name, result in _sorted_results_items:  # 使用重新定义的 _sorted_results_items
-                if exp_name not in ['original_baseline_bilstm', 'optimized_baseline_bilstm']:
+                if exp_name not in ['original_baseline_bilstm']:
                     current_auc = result.get('final_auc', 0.0)
+                    current_std = result.get('final_results', {}).get('auc_std', 0.0)
                     drop = original_baseline_auc - current_auc
                     impact_type = "Drop" if drop > 0 else "Gain" if drop < 0 else "No Change"
-                    print(
-                        f"    - '{result['config']['name'].split('(')[0].strip()}': {impact_type} in AUC: {abs(drop):.4f}\n")
+                    print(f"    - '{result['config']['name'].split('(')[0].strip()}': {impact_type} in AUC: {abs(drop):.4f} (±{current_std:.4f})")
                     if abs(drop) > abs(max_drop):
                         max_drop = drop
                         most_impactful_ablation = result['config']['name']
 
             if most_impactful_ablation:
                 impact_type = "Drop" if max_drop > 0 else "Gain" if max_drop < 0 else "No Change"
-                print(f"\n  - **Most impactful change (largest absolute AUC difference from Original Baseline):**\n")
-                print(
-                    f"    -> '{most_impactful_ablation.split('(')[0].strip()}' ({impact_type} of {abs(max_drop):.4f})\n")
+                print(f"\n  - **Most impactful change (largest absolute AUC difference from Baseline):**")
+                print(f"    -> '{most_impactful_ablation.split('(')[0].strip()}' ({impact_type} of {abs(max_drop):.4f})")
         else:
-            print("Baseline or Optimized Baseline results not available for detailed findings.")
+            print("Baseline results not available for detailed findings.")
 
         print(f"\n{'=' * 60}")
 
@@ -2027,28 +1649,24 @@ def main():
 
     print("🧪 Multimodal Hypergraph Anomaly Detection System - Ablation Study (PathMNIST)")
     print("================================================================================")
-    print("Note: All experiments are now using the BiLSTM Text Encoder by default.")
+    print("🔄 Note: Each experiment will run 3 times to ensure statistical reliability")
+    print("📊 Results will be averaged with standard deviation reported")
 
     ablation_exp = AblationExperiment()
 
-    # data_path 已经直接在 AblationExperiment 的 __init__ 中的 self.base_config 里设置了
-    # 所以这里不需要再单独设置 ablation_exp.base_config['data_path']，避免覆盖或不一致
-    # 但如果您的路径每次运行都不同，可以在这里根据需要覆盖
-
     print("Starting ablation experiments with PathMNIST dataset...")
-    results = ablation_exp.run_all_experiments(epochs=50)
+    print("⚠️  This may take longer due to multiple runs per experiment...")
+    results = ablation_exp.run_all_experiments(epochs=80)
 
-    print("\nGenerating comprehensive experiment visualization...")
+    print("\nGenerating comprehensive experiment visualization with error bars...")
     ablation_exp.create_visualization()
 
-    print("\nGenerating enhanced experiment visualization with detailed analysis...")
-    ablation_exp.create_enhanced_visualization()
-
-    print("\nPrinting analysis report to console...")
+    print("\nPrinting detailed analysis report with multiple-run statistics...")
     ablation_exp.print_analysis_report()
 
     print("\n🎉 PathMNIST ablation experiments completed!")
-    print("✅ All metrics (AUC, Accuracy) have been evaluated and visualized")
+    print("✅ All metrics (AUC, Accuracy) averaged over multiple runs")
+    print("📈 Standard deviations provide confidence intervals for results")
 
 
 if __name__ == "__main__":

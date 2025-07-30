@@ -16,111 +16,37 @@ import jieba  # 新增：导入 jieba 用于中文分词
 import random
 import pandas as pd  # 添加pandas导入
 
+import sys
+import os
+# 添加项目根目录到Python路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 现在可以正常导入
+from models.modules.hyper_generator import HybridHyperedgeGenerator
+from models.modules.wavelet_cheb_conv import WaveletChebConv
+from models.modules.pruning_regularizer import SpectralCutRegularizer
+
 warnings.filterwarnings('ignore')
 
 # ====================================================================================
-# START: REQUIRED MODULES / PLACEHOLDERS (确保这些类的定义存在并正确)
+# START: MULTIMODAL TEXT ENCODER AND ABLATION CLASSES  
 # ====================================================================================
 
-# Placeholder for HybridHyperedgeGenerator (来自 models.modules.hyper_generator)
-class HybridHyperedgeGenerator(nn.Module):
+# 兼容适配器：包装新的HybridHyperedgeGenerator以保持旧接口
+class HybridHyperedgeGeneratorAdapter(nn.Module):
+    """适配器：包装新的HybridHyperedgeGenerator以保持旧的接口兼容性"""
     def __init__(self, num_modalities, input_dims, hidden_dim, top_k, threshold):
         super().__init__()
-        self.modality_projections = nn.ModuleList([
-            nn.Sequential(nn.Linear(dim, hidden_dim), nn.ReLU()) for dim in input_dims
-        ])
-        self.att_scorer = nn.Linear(hidden_dim * num_modalities, 1)
-        self.top_k = top_k
-        self.threshold = threshold
-
+        self.generator = HybridHyperedgeGenerator(
+            num_modalities=num_modalities,
+            input_dims=input_dims, 
+            hidden_dim=hidden_dim,
+            top_k=top_k,
+            threshold=threshold
+        )
+    
     def forward(self, features_list):
-        batch_size = features_list[0].shape[0]
-        device = features_list[0].device
-
-        projected_features = [proj(feat) for proj, feat in zip(self.modality_projections, features_list)]
-        combined_features = torch.cat(projected_features, dim=1)
-        attention_scores = torch.sigmoid(self.att_scorer(combined_features).squeeze())  # Sigmoid on attention scores
-
-        normalized_combined_features = F.normalize(torch.cat(features_list, dim=1), dim=1)
-        similarity = torch.mm(normalized_combined_features, normalized_combined_features.t())
-
-        num_hyperedges = batch_size
-        H_final = torch.zeros(batch_size, num_hyperedges, device=device)
-
-        actual_top_k = min(self.top_k, batch_size)
-        _, top_k_indices = torch.topk(similarity, actual_top_k, dim=1)
-
-        for i in range(batch_size):
-            H_final[i, i] = 1.0
-            for neighbor_idx in top_k_indices[i]:
-                if neighbor_idx < batch_size:
-                    H_final[neighbor_idx, i] = 1.0
-
-        for i in range(num_hyperedges):
-            if H_final[:, i].sum() == 0:
-                H_final[i, i] = 1.0
-
-        edge_weights = attention_scores
-        if edge_weights.shape[0] != num_hyperedges:
-            # Fallback if dimensions don't match, or use a more robust weighting
-            edge_weights = torch.ones(num_hyperedges, device=device) * (
-                attention_scores.mean() if attention_scores.numel() > 0 else 1.0)
-
-        edge_weights = torch.clamp(edge_weights, min=1e-8)
-
-        return H_final, edge_weights
-
-
-# Corrected WaveletChebConv (已修正过维度问题)
-class WaveletChebConv(nn.Module):
-    def __init__(self, in_dim, out_dim, K, tau):
-        super().__init__()
-        self.linear = nn.Linear(in_dim, out_dim)
-        self.K = K
-        self.tau = tau
-
-    def forward(self, x, L):
-        if self.K == 0:
-            return self.linear(x)
-
-        Tx_0 = x
-        Tx_1 = torch.mm(L, x)
-
-        cheb_terms = [Tx_0, Tx_1]
-
-        for k in range(2, self.K):
-            Tx_k = 2 * torch.mm(L, cheb_terms[-1]) - cheb_terms[-2]
-            cheb_terms.append(Tx_k)
-
-        summed_cheb_output = torch.sum(torch.stack(cheb_terms, dim=0), dim=0)
-
-        return self.linear(summed_cheb_output)
-
-
-# Placeholder for SpectralCutRegularizer
-class SpectralCutRegularizer(nn.Module):
-    def __init__(self, use_rayleigh=True, reduction='mean'):
-        super().__init__()
-        self.use_rayleigh = use_rayleigh
-        self.reduction = reduction
-
-    def forward(self, representations, H, Dv, De):
-        if self.use_rayleigh:
-            if representations.numel() == 0:
-                return torch.tensor(0.0, device=representations.device)
-            reg_loss = torch.norm(representations, p=2)
-            if self.reduction == 'mean':
-                reg_loss = reg_loss.mean()
-            elif self.reduction == 'sum':
-                reg_loss = reg_loss.sum()
-            return reg_loss * 0.01
-        else:
-            return torch.tensor(0.0, device=representations.device)
-
-
-# ====================================================================================
-# END: REQUIRED MODULES / PLACEHOLDERS
-# ====================================================================================
+        return self.generator(features_list)
 
 
 # 升级后的 BiLSTM 文本编码器类 - 接受词嵌入序列
@@ -380,7 +306,7 @@ class AblationAnomalyDetector(nn.Module):
 
         input_dims = [config['hidden_dim']] * 2
         if ablation_config['hypergraph_type'] == 'dynamic':
-            self.hypergraph_generator = HybridHyperedgeGenerator(
+            self.hypergraph_generator = HybridHyperedgeGeneratorAdapter(
                 num_modalities=2,
                 input_dims=input_dims,
                 hidden_dim=config['hidden_dim'],
@@ -1179,7 +1105,7 @@ class AblationTrainer:
 
         return self._compute_metrics(all_scores, all_labels)
 
-    def evaluate_testset(self, num_batches=10):
+    def evaluate_testset(self, num_batches=50):
         """
         ✅ 最终测试集评估（仅在训练完成后调用）
         这是真正的泛化性能测试
@@ -1265,11 +1191,9 @@ class AblationExperiment:
             'max_seq_len': 64,
             'vocab_size': None,
             'text_dim': 64,
-
-            # =================== 坚定地修改以下三个参数 ===================
-            'top_k': 5,  # 必须修改。从10改为5，构建稀疏高质量的图。
-            'cheb_k': 3,  # 必须修改。从10改为3，聚焦局部特征，防止过平滑。
-            'learning_rate': 0.0005,  # 必须修改。从0.001改为0.0005，稳定训练过程。
+            'top_k': 3,  
+            'cheb_k': 3,  
+            'learning_rate': 0.0005, 
             # ==========================================================
 
             'threshold': 0.6,  # 此参数可保持不变
@@ -1327,38 +1251,78 @@ class AblationExperiment:
             },
         }
 
-    def run_experiment(self, experiment_name, epochs=30):
-        """运行单个消融实验"""
+    def run_experiment(self, experiment_name, epochs=30, num_runs=1):
+        """运行单个消融实验（支持多次运行取平均值）"""
         print(f"\n{'=' * 20} {self.ablation_configs[experiment_name]['name']} {'=' * 20}")
+        if num_runs > 1:
+            print(f"🔄 Running {num_runs} times for robust evaluation...")
 
         ablation_config = self.ablation_configs[experiment_name]
 
         try:
-            model = AblationAnomalyDetector(self.base_config, ablation_config).to(self.device)
-            print(f"DEBUG: All experiments now using BiLSTM Text Encoder with Word Embeddings.")
+            all_run_results = []
+            all_train_losses = []
+            all_val_metrics = []
+            
+            for run_idx in range(num_runs):
+                if num_runs > 1:
+                    print(f"\n--- Run {run_idx + 1}/{num_runs} ---")
+                
+                model = AblationAnomalyDetector(self.base_config, ablation_config).to(self.device)
+                if run_idx == 0:  # Only print once
+                    print(f"DEBUG: All experiments now using BiLSTM Text Encoder with Word Embeddings.")
 
-            trainer = AblationTrainer(model, self.base_config, self.device)
+                trainer = AblationTrainer(model, self.base_config, self.device)
 
-            print(f"Starting training for {epochs} epochs...")
+                if run_idx == 0:  # Only print once
+                    print(f"Starting training for {epochs} epochs...")
 
-            train_losses, val_metrics = trainer.train(epochs, train_batches=15, val_batches=5)
+                train_losses, val_metrics = trainer.train(epochs, train_batches=15, val_batches=5)
+                final_results = trainer.evaluate_testset(num_batches=32)
+                
+                all_run_results.append(final_results)
+                all_train_losses.append(train_losses)
+                all_val_metrics.append(val_metrics)
+                
+                if num_runs > 1:
+                    print(f"Run {run_idx + 1} Results - AUC: {final_results['auc']:.4f}, "
+                          f"Accuracy: {final_results['accuracy']:.4f}")
 
-            final_results = trainer.evaluate_testset(num_batches=32)
+            # Compute averages across runs
+            if num_runs > 1:
+                avg_final_results = self._compute_average_results(all_run_results)
+                std_final_results = self._compute_std_results(all_run_results)
+                avg_train_losses = self._compute_average_losses(all_train_losses)
+                avg_val_metrics = self._compute_average_val_metrics(all_val_metrics)
+                avg_val_aucs = self._compute_average_val_aucs(all_val_metrics)
+                
+                print(f"\n📊 Average Results across {num_runs} runs:")
+                print(f"Final Results - AUC: {avg_final_results['auc']:.4f}±{std_final_results['auc']:.3f}, "
+                      f"Accuracy: {avg_final_results['accuracy']:.4f}±{std_final_results['accuracy']:.3f}")
+            else:
+                avg_final_results = all_run_results[0]
+                avg_train_losses = all_train_losses[0]
+                avg_val_metrics = all_val_metrics[0]
+                avg_val_aucs = [m['auc'] for m in avg_val_metrics]
 
             self.results[experiment_name] = {
                 'config': ablation_config,
-                'train_losses': train_losses,
-                'val_metrics': val_metrics,
-                'final_results': final_results,
-                'val_aucs': [m['auc'] for m in val_metrics],
-                'final_auc': final_results['auc'],
+                'train_losses': avg_train_losses,
+                'val_metrics': avg_val_metrics,
+                'final_results': avg_final_results,
+                'val_aucs': avg_val_aucs,
+                'final_auc': avg_final_results['auc'],
+                'num_runs': num_runs,
+                'all_run_results': all_run_results if num_runs > 1 else None,
+                'std_results': std_final_results if num_runs > 1 else None,
             }
 
             print(f"Experiment {ablation_config['name']} completed")
-            print(f"Final Results - AUC: {final_results['auc']:.4f}, "
-                  f"Accuracy: {final_results['accuracy']:.4f}")
+            if num_runs == 1:
+                print(f"Final Results - AUC: {avg_final_results['auc']:.4f}, "
+                      f"Accuracy: {avg_final_results['accuracy']:.4f}")
 
-            return final_results
+            return avg_final_results
 
         except Exception as e:
             print(f"Experiment {experiment_name} failed: {e}")
@@ -1378,11 +1342,81 @@ class AblationExperiment:
                 'final_results': default_results,
                 'val_aucs': [],
                 'final_auc': 0.0,
+                'num_runs': num_runs,
+                'all_run_results': None,
+                'std_results': None,
             }
 
             return default_results
 
-    def run_all_experiments(self, epochs=30):
+    def _compute_average_results(self, all_run_results):
+        """计算多次运行结果的平均值"""
+        avg_results = {}
+        if not all_run_results:
+            return {'auc': 0.0, 'accuracy': 0.0}
+        
+        for key in all_run_results[0].keys():
+            if key in ['auc', 'accuracy']:
+                values = [result[key] for result in all_run_results if key in result]
+                avg_results[key] = np.mean(values) if values else 0.0
+            else:
+                avg_results[key] = all_run_results[0][key]  # Keep non-numeric values from first run
+        
+        return avg_results
+
+    def _compute_std_results(self, all_run_results):
+        """计算多次运行结果的标准差"""
+        std_results = {}
+        if not all_run_results:
+            return {'auc': 0.0, 'accuracy': 0.0}
+        
+        for key in ['auc', 'accuracy']:
+            values = [result[key] for result in all_run_results if key in result]
+            std_results[key] = np.std(values) if len(values) > 1 else 0.0
+        
+        return std_results
+
+    def _compute_average_losses(self, all_train_losses):
+        """计算多次运行训练损失的平均值"""
+        if not all_train_losses or not all_train_losses[0]:
+            return []
+        
+        min_length = min(len(losses) for losses in all_train_losses)
+        avg_losses = []
+        
+        for epoch_idx in range(min_length):
+            epoch_losses = [losses[epoch_idx] for losses in all_train_losses]
+            avg_losses.append(np.mean(epoch_losses))
+        
+        return avg_losses
+
+    def _compute_average_val_metrics(self, all_val_metrics):
+        """计算多次运行验证指标的平均值"""
+        if not all_val_metrics or not all_val_metrics[0]:
+            return []
+        
+        min_length = min(len(metrics) for metrics in all_val_metrics)
+        avg_val_metrics = []
+        
+        for metric_idx in range(min_length):
+            # Collect metrics for this validation point across all runs
+            auc_values = [metrics[metric_idx]['auc'] for metrics in all_val_metrics if metric_idx < len(metrics)]
+            accuracy_values = [metrics[metric_idx]['accuracy'] for metrics in all_val_metrics if metric_idx < len(metrics)]
+            
+            avg_metric = {
+                'auc': np.mean(auc_values) if auc_values else 0.0,
+                'accuracy': np.mean(accuracy_values) if accuracy_values else 0.0
+            }
+            avg_val_metrics.append(avg_metric)
+        
+        return avg_val_metrics
+
+    def _compute_average_val_aucs(self, all_val_metrics):
+        """计算多次运行验证AUC的平均值"""
+        avg_val_metrics = self._compute_average_val_metrics(all_val_metrics)
+        return [metric['auc'] for metric in avg_val_metrics]
+
+    def run_all_experiments(self, epochs=30, num_runs=1):
         """运行所有消融实验"""
         print(f"Starting ablation experiments, device: {self.device}")
 
@@ -1414,7 +1448,7 @@ class AblationExperiment:
         for exp_name in experiment_order:
             if exp_name in self.ablation_configs:
                 try:
-                    self.run_experiment(exp_name, epochs)
+                    self.run_experiment(exp_name, epochs, num_runs)
                 except Exception as e:
                     print(f"Experiment {exp_name} failed: {str(e)}")
                     continue
@@ -1545,134 +1579,70 @@ class AblationExperiment:
         plt.show()  # Display the plot instead of saving
 
         # Display performance summary in console
-        self._print_performance_summary(methods, aucs, accuracies)
+        self._print_experimental_results()
 
-    def _print_performance_summary(self, methods, aucs, accuracies):
-        """Print performance summary to console"""
-        print("\n" + "="*60)
-        print("ABLATION EXPERIMENT PERFORMANCE SUMMARY")
-        print("="*60)
+    def _print_experimental_results(self):
+        """Print experimental results with standard deviation information"""
+        print("\n" + "="*80)
+        print("📊 Experimental Results (Mean ± Std across multiple runs):")
+        print("="*80)
         
-        # Create a list of tuples for sorting
-        results = list(zip(methods, aucs, accuracies))
-        # Sort by AUC in descending order
-        results.sort(key=lambda x: x[1], reverse=True)
+        # Check if any experiment has multiple runs
+        has_multiple_runs = any(
+            result.get('num_runs', 1) > 1 
+            for result in self.results.values()
+        )
         
-        print(f"{'Method':<25} {'AUC':<8} {'Accuracy':<10}")
-        print("-" * 45)
+        if not has_multiple_runs:
+            print("Note: Single run results (no standard deviation)")
         
-        for method, auc, acc in results:
-            print(f"{method:<25} {auc:<8.4f} {acc:<10.4f}")
+        # Sort results by AUC
+        sorted_results = sorted(
+            self.results.items(), 
+            key=lambda x: x[1]['final_auc'], 
+            reverse=True
+        )
         
-        print("="*60)
-
-    # These functions are no longer needed since we're not saving files
-    # def _create_performance_table(self, save_dir, methods, aucs, accuracies):
-    # def _generate_analysis_report(self, save_dir, methods, aucs, accuracies):
-        """创建性能对比表格"""
-        table_path = os.path.join(save_dir, 'performance_table.csv')
-
-        import pandas as pd
-        data = {
-            'Method': methods,
-            'AUC': aucs,
-            'Accuracy': accuracies
-        }
-
-        df = pd.DataFrame(data)
-        df = df.sort_values('AUC', ascending=False)
-        df['Rank'] = range(1, len(df) + 1)
-        df = df[['Rank', 'Method', 'AUC', 'Accuracy']]
-
-        df.to_csv(table_path, index=False)
-        print(f"Performance table saved to: {table_path}")
-
-    def _generate_analysis_report(self, save_dir, methods, aucs, accuracies):
-        """生成分析报告（只包含AUC和Accuracy）"""
-        report_path = os.path.join(save_dir, 'analysis_report.txt')
-
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write("=" * 80 + "\n")
-            f.write("MULTIMODAL HYPERGRAPH ANOMALY DETECTION - ABLATION STUDY REPORT (BiLSTM Word Embeddings)\n")
-            f.write("=" * 80 + "\n\n")
-
-            f.write("1. EXPERIMENT OVERVIEW\n")
-            f.write("-" * 40 + "\n")
-            f.write(f"Total Experiments: {len(methods)}\n")
-            f.write(f"Text Encoder Used for ALL experiments: BiLSTM with Word Embeddings\n")
-            f.write(f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-
-            f.write("2. PERFORMANCE SUMMARY\n")
-            f.write("-" * 40 + "\n")
-            for i, method in enumerate(methods):
-                f.write(f"{method}:\n")
-                f.write(f"  - AUC: {aucs[i]:.4f}\n")
-                f.write(f"  - Accuracy: {accuracies[i]:.4f}\n")
-                f.write(f"  - Average: {(aucs[i] + accuracies[i]) / 2:.4f}\n\n")
-
-            f.write("3. BEST PERFORMERS\n")
-            f.write("-" * 40 + "\n")
-
-            best_auc_idx = np.argmax(aucs)
-            best_acc_idx = np.argmax(accuracies)
-
-            f.write("Best Performers by Metric:\n")
-            f.write(f"  - Best AUC: {methods[best_auc_idx]} ({aucs[best_auc_idx]:.4f})\n")
-            f.write(f"  - Best Accuracy: {methods[best_acc_idx]} ({accuracies[best_acc_idx]:.4f})\n\n")
-
-            avg_scores = [(a + b) / 2 for a, b in zip(aucs, accuracies)]
-            best_overall_idx = np.argmax(avg_scores)
-
-            f.write("Overall Performance:\n")
-            f.write(f"  - Best Overall: {methods[best_overall_idx]} (Avg: {avg_scores[best_overall_idx]:.4f})\n\n")
-
-            f.write("4. KEY FINDINGS (All experiments use BiLSTM with Word Embeddings):\n")
-            f.write("-" * 40 + "\n")
-
-            _results_for_analysis = {k: v for k, v in self.results.items() if k in self.ablation_configs}
-            _sorted_results_items = sorted(_results_for_analysis.items(), key=lambda x: x[1].get('final_auc', 0.0),
-                                           reverse=True)  # Fix sorted reverse
-
-            original_baseline_auc = self.results.get('original_baseline_bilstm', {}).get('final_auc', 0.0)
-            optimized_baseline_auc = self.results.get('optimized_baseline_bilstm', {}).get('final_auc', 0.0)
-
-            f.write(f"  - Original Baseline (Dynamic Hypergraph) AUC: {original_baseline_auc:.4f}\n")
-            f.write(f"  - **Optimized Baseline (Similarity Prior Hypergraph) AUC: {optimized_baseline_auc:.4f}**\n")
-            if optimized_baseline_auc > original_baseline_auc:
-                f.write(
-                    f"    -> Performance improved by: {optimized_baseline_auc - original_baseline_auc:.4f} (indicating 'Similarity Prior' is a beneficial hypergraph strategy with BiLSTM).\n")
+        print(f"{'Method':<40} {'AUC':<15} {'Accuracy':<15} {'Combined':<12}")
+        print("-" * 85)
+        
+        for exp_name, result in sorted_results:
+            method_name = result['config']['name'][:37] + "..." if len(result['config']['name']) > 40 else result['config']['name']
+            
+            auc = result['final_auc']
+            accuracy = result['final_results'].get('accuracy', 0.0)
+            combined = (auc + accuracy) / 2
+            
+            if result.get('std_results') and result.get('num_runs', 1) > 1:
+                auc_std = result['std_results'].get('auc', 0.0)
+                acc_std = result['std_results'].get('accuracy', 0.0)
+                combined_std = (auc_std + acc_std) / 2
+                
+                auc_str = f"{auc:.3f}±{auc_std:.3f}"
+                acc_str = f"{accuracy:.3f}±{acc_std:.3f}"
+                combined_str = f"{combined:.3f}±{combined_std:.3f}"
             else:
-                f.write(
-                    f"    -> Optimization attempt did not improve performance significantly compared to original baseline (Difference: {optimized_baseline_auc - original_baseline_auc:.4f}).\n")
+                auc_str = f"{auc:.3f}"
+                acc_str = f"{accuracy:.3f}"
+                combined_str = f"{combined:.3f}"
+            
+            print(f"{method_name:<40} {auc_str:<15} {acc_str:<15} {combined_str:<12}")
+        
+        # Print stability analysis if multiple runs
+        if has_multiple_runs:
+            print("\n" + "="*60)
+            print("📈 Stability Analysis (Lower std = more stable):")
+            print("="*60)
+            
+            for exp_name, result in sorted_results:
+                if result.get('std_results') and result.get('num_runs', 1) > 1:
+                    method_name = result['config']['name'][:30] + "..." if len(result['config']['name']) > 33 else result['config']['name']
+                    auc_std = result['std_results'].get('auc', 0.0)
+                    acc_std = result['std_results'].get('accuracy', 0.0)
+                    print(f"{method_name:<35} AUC std: {auc_std:.4f}, Acc std: {acc_std:.4f}")
+        
+        print("="*80)
 
-            max_drop = 0
-            most_impactful_ablation = None
-
-            f.write(
-                "\n  - Impact of other module changes (relative to Original Baseline with BiLSTM Word Embeddings):\n")
-            for exp_name, result in _sorted_results_items:
-                if exp_name not in ['original_baseline_bilstm', 'optimized_baseline_bilstm']:
-                    current_auc = result.get('final_auc', 0.0)
-                    drop = original_baseline_auc - current_auc
-                    impact_type = "Drop" if drop > 0 else "Gain" if drop < 0 else "No Change"
-                    f.write(
-                        f"    - '{result['config']['name'].split('(')[0].strip()}': {impact_type} in AUC: {abs(drop):.4f}\n")
-                    if abs(drop) > abs(max_drop):
-                        max_drop = drop
-                        most_impactful_ablation = result['config']['name']
-
-            if most_impactful_ablation:
-                impact_type = "Drop" if max_drop > 0 else "Gain" if max_drop < 0 else "No Change"
-                f.write(f"\n  - **Most impactful change (largest absolute AUC difference from Original Baseline):**\n")
-                f.write(
-                    f"    -> '{most_impactful_ablation.split('(')[0].strip()}' ({impact_type} of {abs(max_drop):.4f})\n")
-
-            f.write("\nEND OF REPORT\n")
-            f.write("=" * 80 + "\n")
-
-        print(f"Analysis report saved to: {report_path}")
-
-    # === create_enhanced_visualization 也需要进行类似优化和位置修正 ===
     def create_enhanced_visualization(self):
         """Create enhanced visualization results with anomaly type analysis (display only)"""
         if not self.results:
@@ -2038,6 +2008,7 @@ def main():
     print("🧪 Multimodal Hypergraph Anomaly Detection System - Ablation Study (BloodMNIST)")
     print("================================================================================")
     print("Note: All experiments are now using the BiLSTM Text Encoder by default.")
+    print("🔄 Each experiment will run 3 times for robust evaluation with error bars.")
 
     ablation_exp = AblationExperiment()
 
@@ -2046,7 +2017,7 @@ def main():
     # 但如果您的路径每次运行都不同，可以在这里根据需要覆盖
 
     print("Starting ablation experiments with BloodMNIST dataset...")
-    results = ablation_exp.run_all_experiments(epochs=50)
+    results = ablation_exp.run_all_experiments(epochs=80, num_runs=3)  # 每个实验运行3次
 
     print("\nGenerating comprehensive experiment visualization...")
     ablation_exp.create_visualization()
@@ -2058,7 +2029,8 @@ def main():
     ablation_exp.print_analysis_report()
 
     print("\n🎉 BloodMNIST ablation experiments completed!")
-    print("✅ All metrics (AUC, Accuracy) have been evaluated and displayed")
+    print("✅ All metrics (AUC, Accuracy) have been evaluated and visualized with statistical significance")
+    print("📊 Results show mean ± standard deviation across 3 independent runs")
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ class HybridHyperedgeGenerator(nn.Module):
     5. 超边打分：根据模态融合特征计算超边权重
     """
     
-    def __init__(self, num_modalities, input_dims, hidden_dim, top_k=10, threshold=0.5):
+    def __init__(self, num_modalities, input_dims, hidden_dim, top_k=8, threshold=0.5):
         """
         初始化混合超边生成器
         

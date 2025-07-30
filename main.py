@@ -16,110 +16,19 @@ import jieba  # 新增：导入 jieba 用于中文分词
 import random
 import pandas as pd  # 添加pandas导入
 
+# 添加项目根目录到Python路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+
+# 导入自定义模块
+from models.modules.hyper_generator import HybridHyperedgeGenerator
+from models.modules.wavelet_cheb_conv import WaveletChebConv
+from models.modules.pruning_regularizer import SpectralCutRegularizer
+
 warnings.filterwarnings('ignore')
 
 # ====================================================================================
-# START: REQUIRED MODULES / PLACEHOLDERS (确保这些类的定义存在并正确)
-# ====================================================================================
-
-# Placeholder for HybridHyperedgeGenerator (来自 models.modules.hyper_generator)
-class HybridHyperedgeGenerator(nn.Module):
-    def __init__(self, num_modalities, input_dims, hidden_dim, top_k, threshold):
-        super().__init__()
-        self.modality_projections = nn.ModuleList([
-            nn.Sequential(nn.Linear(dim, hidden_dim), nn.ReLU()) for dim in input_dims
-        ])
-        self.att_scorer = nn.Linear(hidden_dim * num_modalities, 1)
-        self.top_k = top_k
-        self.threshold = threshold
-
-    def forward(self, features_list):
-        batch_size = features_list[0].shape[0]
-        device = features_list[0].device
-
-        projected_features = [proj(feat) for proj, feat in zip(self.modality_projections, features_list)]
-        combined_features = torch.cat(projected_features, dim=1)
-        attention_scores = torch.sigmoid(self.att_scorer(combined_features).squeeze())  # Sigmoid on attention scores
-
-        normalized_combined_features = F.normalize(torch.cat(features_list, dim=1), dim=1)
-        similarity = torch.mm(normalized_combined_features, normalized_combined_features.t())
-
-        num_hyperedges = batch_size
-        H_final = torch.zeros(batch_size, num_hyperedges, device=device)
-
-        actual_top_k = min(self.top_k, batch_size)
-        _, top_k_indices = torch.topk(similarity, actual_top_k, dim=1)
-
-        for i in range(batch_size):
-            H_final[i, i] = 1.0
-            for neighbor_idx in top_k_indices[i]:
-                if neighbor_idx < batch_size:
-                    H_final[neighbor_idx, i] = 1.0
-
-        for i in range(num_hyperedges):
-            if H_final[:, i].sum() == 0:
-                H_final[i, i] = 1.0
-
-        edge_weights = attention_scores
-        if edge_weights.shape[0] != num_hyperedges:
-            # Fallback if dimensions don't match, or use a more robust weighting
-            edge_weights = torch.ones(num_hyperedges, device=device) * (
-                attention_scores.mean() if attention_scores.numel() > 0 else 1.0)
-
-        edge_weights = torch.clamp(edge_weights, min=1e-8)
-
-        return H_final, edge_weights
-
-
-# Corrected WaveletChebConv (已修正过维度问题)
-class WaveletChebConv(nn.Module):
-    def __init__(self, in_dim, out_dim, K, tau):
-        super().__init__()
-        self.linear = nn.Linear(in_dim, out_dim)
-        self.K = K
-        self.tau = tau
-
-    def forward(self, x, L):
-        if self.K == 0:
-            return self.linear(x)
-
-        Tx_0 = x
-        Tx_1 = torch.mm(L, x)
-
-        cheb_terms = [Tx_0, Tx_1]
-
-        for k in range(2, self.K):
-            Tx_k = 2 * torch.mm(L, cheb_terms[-1]) - cheb_terms[-2]
-            cheb_terms.append(Tx_k)
-
-        summed_cheb_output = torch.sum(torch.stack(cheb_terms, dim=0), dim=0)
-
-        return self.linear(summed_cheb_output)
-
-
-# Placeholder for SpectralCutRegularizer
-class SpectralCutRegularizer(nn.Module):
-    def __init__(self, use_rayleigh=True, reduction='mean'):
-        super().__init__()
-        self.use_rayleigh = use_rayleigh
-        self.reduction = reduction
-
-    def forward(self, representations, H, Dv, De):
-        if self.use_rayleigh:
-            if representations.numel() == 0:
-                return torch.tensor(0.0, device=representations.device)
-            reg_loss = torch.norm(representations, p=2)
-            if self.reduction == 'mean':
-                reg_loss = reg_loss.mean()
-            elif self.reduction == 'sum':
-                reg_loss = reg_loss.sum()
-            return reg_loss * 0.01
-        else:
-            return torch.tensor(0.0, device=representations.device)
-
-
-# ====================================================================================
-# END: REQUIRED MODULES / PLACEHOLDERS
+# START: MULTIMODAL TEXT ENCODER AND CORE CLASSES
 # ====================================================================================
 
 
@@ -1075,12 +984,9 @@ class BaselineExperiment:
             'max_seq_len': 64,
             'vocab_size': None,
             'text_dim': 64,
-
-            # =================== 坚定地修改以下三个参数 ===================
-            'top_k': 5,  # 必须修改。从10改为5，构建稀疏高质量的图。
-            'cheb_k': 3,  # 必须修改。从10改为3，聚焦局部特征，防止过平滑。
-            'learning_rate': 0.0005,  # 必须修改。从0.001改为0.0005，稳定训练过程。
-            # ==========================================================
+            'top_k': 10,  
+            'cheb_k': 3,  
+            'learning_rate': 0.001,  # 必须修改。从0.001改为0.0005，稳定训练过程。
 
             'threshold': 0.6,  # 此参数可保持不变
             'k_nearest': 3,
@@ -1217,7 +1123,7 @@ def main():
         experiment = BaselineExperiment()
         
         print(f"Starting baseline experiment with {dataset.upper()} dataset...")
-        results = experiment.run_baseline_only(epochs=50, dataset=dataset)
+        results = experiment.run_baseline_only(epochs=80, dataset=dataset)
         
         # 存储结果
         all_results[dataset] = results
